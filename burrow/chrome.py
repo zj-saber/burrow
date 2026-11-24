@@ -7,7 +7,7 @@ from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtWidgets import (QHBoxLayout, QLabel, QLineEdit, QMenu, QStackedWidget, QTabBar,
                                QToolButton, QWidget)
 
-from .model import DRIVES
+from .model import DRIVES, NETWORK
 
 
 class TabHost(QObject):
@@ -116,14 +116,25 @@ class TabHost(QObject):
 
 
 def path_segments(path: str) -> list[tuple[str, str]]:
+    if path == NETWORK:
+        return [("Network", NETWORK)]
+    if path.startswith("\\\\"):
+        # \\server\share\rest  ->  Network › server › share › ...
+        parts = [p for p in path[2:].split("\\") if p]
+        segs = [("Network", NETWORK)]
+        if parts:
+            server = "\\\\" + parts[0]
+            segs.append((parts[0], server))
+            cur = server
+            for part in parts[1:]:
+                cur = cur + "\\" + part
+                segs.append((part, cur))
+        return segs
     segs = [("This PC", DRIVES)]
     if path == DRIVES:
         return segs
     drive, rest = os.path.splitdrive(path)
-    if drive.startswith("\\\\"):
-        segs = [(drive, drive + "\\")]
-    else:
-        segs.append((drive, drive + "\\"))
+    segs.append((drive, drive + "\\"))
     cur = drive + "\\"
     for part in [p for p in rest.split("\\") if p]:
         cur = os.path.join(cur, part)
@@ -184,7 +195,7 @@ class Breadcrumb(QWidget):
             btn = CrumbButton()
             btn.setText(label)
             btn.setCursor(Qt.CursorShape.ArrowCursor)
-            btn.setToolTip(p if p != DRIVES else "This PC")
+            btn.setToolTip({DRIVES: "This PC", NETWORK: "Network"}.get(p, p))
             btn.clicked.connect(lambda _=False, p=p: self.navigate.emit(p, False))
             btn.middleClicked.connect(lambda p=p: self.navigate.emit(p, True))
             self.h.addWidget(btn)

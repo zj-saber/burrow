@@ -9,7 +9,8 @@ from PySide6.QtGui import QFontDatabase, QImageReader, QPixmap
 from PySide6.QtWidgets import (QFormLayout, QLabel, QPlainTextEdit, QSizePolicy, QVBoxLayout,
                                QWidget)
 
-from .model import CLOUD_ONLY, DRIVES, Entry, attr_string, human_size, icon_cache
+from . import places
+from .model import CLOUD_ONLY, DRIVES, NETWORK, Entry, attr_string, human_size, icon_cache
 
 TEXT_EXTS = set("""txt md markdown log ini cfg conf toml yaml yml json jsonc xml html htm css scss less
 js mjs cjs ts tsx jsx py pyw pyi c h cpp hpp cc cs java kt kts go rs rb php pl lua sh bash zsh ps1
@@ -151,11 +152,21 @@ class Inspector(QWidget):
         if folder in (None, DRIVES):
             self._set_icon(icons.computer)
             self.title.setText("This PC")
-            self._set_note("Your drives. Select one to see details.")
+            self._set_note("Your drives and cloud folders. Select one to see details.")
+            return
+        if folder == NETWORK or places.is_server(folder):
+            self._set_icon(icons.network)
+            self.title.setText("Network" if folder == NETWORK else folder[2:])
+            self._set_note("Mapped network drives and computers you've opened. Type \\\\computer "
+                           "in the address bar to browse another one." if folder == NETWORK
+                           else "Shared folders on this computer.")
             return
         self._set_icon(icons.folder)
-        self.title.setText(os.path.basename(folder) or folder)
+        self.title.setText(os.path.basename(folder.rstrip("\\")) or folder)
         self._row("Location", folder)
+        if places.is_remote(folder):
+            self._row("Contents", "On a network location")
+            return                              # don't scan a share on the GUI thread
         self._folder_counts(folder)
         try:
             st = os.stat(folder)
@@ -191,15 +202,22 @@ class Inspector(QWidget):
         self._set_icon(icons.icon(e))
         self.title.setText(e.name)
         if e.is_drive:
-            self._row("Drive", e.path)
-            self._row("Space", e.note)
+            label = {"cloud": "Cloud folder", "network": "Network drive", "server": "Computer",
+                     "share": "Shared folder"}.get(e.kind, "Drive")
+            self._row("Kind", label)
+            self._row("Path", e.path)
+            if e.kind in ("", "local", "removable", "optical"):
+                self._row("Space", e.note)
+            elif e.kind == "network":
+                self._row("Status", e.note.split(" · ")[0])
             return
+        remote = places.is_remote(e.path)
         self._row("Type", icons.type_name(e))
         if not e.is_dir:
             self._row("Size", f"{human_size(e.size)} ({e.size:,} bytes)" if e.size and e.size >= 1024
                       else human_size(e.size))
         self._row("Location", os.path.dirname(e.path))
-        if e.is_dir:
+        if e.is_dir and not remote:
             self._folder_counts(e.path)
         self._row("Created", _fmt_time(e.ctime))
         self._row("Modified", _fmt_time(e.mtime))
@@ -210,6 +228,9 @@ class Inspector(QWidget):
         if e.attrs & CLOUD_ONLY:
             self._set_note("This file is only in the cloud. Open it to download it; "
                            "the preview won't download it for you.")
+            return
+        if remote and (e.size or 0) > 512 * 1024:
+            self._set_note("Large file on a network location: no automatic preview.")
             return
         if e.ext in self._img_exts:
             self._preview_image(e)

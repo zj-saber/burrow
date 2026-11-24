@@ -88,6 +88,7 @@ DEFAULTS = {
     "theme": "system",
     "show_menubar": False,
     "bookmarks": [],
+    "recent_servers": [],
     "presets": {},
     "active_preset": "Details + Dates",
     "view": normalize_layout(BUILTIN_PRESETS["Details + Dates"]),

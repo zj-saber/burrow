@@ -12,9 +12,10 @@ from PySide6.QtCore import (QAbstractTableModel, QFileInfo, QMimeData, QModelInd
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QFileIconProvider
 
+from . import places
 from .config import COLUMN_TITLES, COLUMNS
+from .places import DRIVES, NETWORK      # pseudo-paths: "This PC" and "Network"
 
-DRIVES = "::drives"                      # pseudo-path for the "This PC" listing
 ENTRY_ROLE = Qt.ItemDataRole.UserRole + 1
 
 ATTR_READONLY = 0x1
@@ -63,13 +64,17 @@ def attr_string(attrs: int) -> str:
 
 class Entry:
     __slots__ = ("name", "path", "is_dir", "size", "mtime", "ctime", "atime", "attrs",
-                 "hidden", "is_drive", "note", "nkey", "ext")
+                 "hidden", "is_drive", "note", "nkey", "ext", "kind")
 
     def __init__(self, name, path, is_dir, size=None, mtime=None, ctime=None, atime=None,
-                 attrs=0, hidden=False, is_drive=False, note=""):
+                 attrs=0, hidden=False, is_drive=False, note="", kind=""):
+        # is_drive marks a location (drive, cloud root, server, share): it can be opened but
+        # not renamed, copied or deleted. kind: "", local, removable, optical, network,
+        # cloud, server, share.
         self.name, self.path, self.is_dir = name, path, is_dir
         self.size, self.mtime, self.ctime, self.atime = size, mtime, ctime, atime
         self.attrs, self.hidden, self.is_drive, self.note = attrs, hidden, is_drive, note
+        self.kind = kind
         self._set_name_keys()
 
     def _set_name_keys(self):
@@ -116,11 +121,16 @@ class IconCache:
         self.file = self.provider.icon(QFileIconProvider.IconType.File)
         self.drive = self.provider.icon(QFileIconProvider.IconType.Drive)
         self.computer = self.provider.icon(QFileIconProvider.IconType.Computer)
+        self.network = self.provider.icon(QFileIconProvider.IconType.Network)
         self._icons: dict = {}
         self._types: dict = {}
 
     def icon(self, e: Entry):
-        if e.is_drive:
+        if e.kind in ("network", "server", "share"):
+            return self.network            # never ask the shell about a network path: it may block
+        if e.is_drive and e.kind == "cloud":
+            key = ("cloud", e.path)        # the provider's own folder icon (OneDrive, iCloud...)
+        elif e.is_drive:
             key = ("drive", e.path)
         elif e.is_dir:
             return self.folder
@@ -186,26 +196,39 @@ def scan_dir(path: str, show_hidden: bool) -> list[Entry]:
     return out
 
 
+def drive_entry(info: dict) -> Entry:
+    name = places.drive_display_name(info)
+    kind = info["kind"]
+    if kind == "network":
+        note = ("Network drive · " if info["connected"] else "Disconnected · ") + info["remote"]
+    elif info["total"] is not None:
+        note = f"{human_size(info['free'])} free of {human_size(info['total'])}"
+    else:
+        note = "Not ready"
+    return Entry(name, info["root"], True, info["total"], is_drive=True, note=note, kind=kind)
+
+
+def cloud_entries() -> list[Entry]:
+    return [Entry(name, path, True, is_drive=True, note="Cloud storage", kind="cloud")
+            for name, path in places.cloud_folders()]
+
+
 def list_drives() -> list[Entry]:
-    out = []
-    for v in QStorageInfo.mountedVolumes():
-        if not v.isValid():
-            continue
-        root = os.path.normpath(v.rootPath())
-        if not re.fullmatch(r"[A-Za-z]:\\", root):
-            continue
-        letter = root[:2].upper()
-        label = v.displayName()
-        if not label or label.upper().startswith(letter):
-            label = "Local Disk"
-        if v.isReady():
-            total, free = v.bytesTotal(), v.bytesAvailable()
-            note = f"{human_size(free)} free of {human_size(total)}"
-        else:
-            total, note = None, "Not ready"
-        out.append(Entry(f"{label} ({letter})", root, True, total, is_drive=True, note=note))
-    out.sort(key=lambda e: e.path)
+    """This PC: drives (network drives included), then cloud folders. No network I/O."""
+    return [drive_entry(i) for i in places.drive_infos()] + cloud_entries()
+
+
+def list_network() -> list[Entry]:
+    out = [drive_entry(i) for i in places.drive_infos() if i["kind"] == "network"]
+    for s in places.RECENT_SERVERS:
+        out.append(Entry(s[2:], s, True, is_drive=True, note="Computer", kind="server"))
     return out
+
+
+def list_shares(server: str) -> list[Entry]:
+    server = server.rstrip("\\")
+    return [Entry(name, f"{server}\\{name}", True, is_drive=True, note="Shared folder", kind="share")
+            for name in places.list_shares(server)]
 
 
 class DirModel(QAbstractTableModel):
@@ -225,19 +248,32 @@ class DirModel(QAbstractTableModel):
         self.meta_color = QColor(128, 128, 128)   # set by the theme: size/type/date columns
 
     # ----- loading & sorting ------------------------------------------------
-    def load(self, path: str, show_hidden: bool) -> str | None:
-        error = None
+    @staticmethod
+    def fetch(path: str, show_hidden: bool) -> tuple[list[Entry], str | None]:
+        """Read a location. Pure Python + OS calls, safe to run on a worker thread."""
         try:
-            entries = list_drives() if path == DRIVES else scan_dir(path, show_hidden)
+            if path == DRIVES:
+                return list_drives(), None
+            if path == NETWORK:
+                return list_network(), None
+            if places.is_server(path):
+                return list_shares(path), None
+            return scan_dir(path, show_hidden), None
         except OSError as ex:
-            entries, error = [], (ex.strerror or str(ex))
+            return [], (ex.strerror or str(ex))
+
+    def load(self, path: str, show_hidden: bool) -> str | None:
+        entries, error = self.fetch(path, show_hidden)
+        self.set_entries(path, entries)
+        return error
+
+    def set_entries(self, path: str, entries: list[Entry]):
         self.beginResetModel()
         self.path = path
         self.entries = entries
         self._dates.clear()
         self._sort_entries()
         self.endResetModel()
-        return error
 
     def _key(self, col: str):
         if col == "size":
@@ -258,6 +294,9 @@ class DirModel(QAbstractTableModel):
         self.entries.sort(key=self._key(col), reverse=self.sort_desc)
         if self.folders_first:
             self.entries.sort(key=lambda e: not e.is_dir)   # stable: keeps the order above
+        if self.path in (DRIVES, NETWORK):
+            rank = {"network": 1, "server": 2, "cloud": 3}
+            self.entries.sort(key=lambda e: rank.get(e.kind, 0))   # drives, network, cloud
 
     def sort(self, column, order=Qt.SortOrder.AscendingOrder):
         self.sort_column = column if column >= 0 else 0

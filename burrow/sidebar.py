@@ -7,9 +7,9 @@ from PySide6.QtCore import QStandardPaths, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import QFrame, QInputDialog, QMenu, QTreeWidget, QTreeWidgetItem
 
-from . import fileops, theme
+from . import fileops, places, theme
 from .config import Config
-from .model import DRIVES, icon_cache, list_drives
+from .model import DRIVES, NETWORK, icon_cache, list_drives
 
 PATH_ROLE = Qt.ItemDataRole.UserRole
 KIND_ROLE = Qt.ItemDataRole.UserRole + 1
@@ -29,6 +29,8 @@ PLACES = [
 class Sidebar(QTreeWidget):
     openRequested = Signal(str, bool)          # path, in new tab?
     dropRequested = Signal(list, str, bool)    # sources, target, move?
+    mapDriveRequested = Signal()
+    disconnectRequested = Signal(str)          # drive letter
 
     def __init__(self, config: Config, parent=None):
         super().__init__(parent)
@@ -57,7 +59,7 @@ class Sidebar(QTreeWidget):
         self._timer.start()
         self.rebuild()
 
-    def _section(self, title, path=None):
+    def _section(self, title, path=None, icon=None):
         it = QTreeWidgetItem(self, [title if path else title.upper()])
         f = it.font(0)
         if path:
@@ -72,7 +74,7 @@ class Sidebar(QTreeWidget):
         flags = Qt.ItemFlag.ItemIsEnabled
         if path:
             flags |= Qt.ItemFlag.ItemIsSelectable
-            it.setIcon(0, icon_cache().computer)
+            it.setIcon(0, icon or icon_cache().computer)
         it.setFlags(flags)
         return it
 
@@ -84,6 +86,10 @@ class Sidebar(QTreeWidget):
         it.setToolTip(0, tip or path)
         return it
 
+    def _signature(self):
+        """Cheap snapshot of what the sidebar shows (no network I/O), polled every 4 s."""
+        return ([(d.path, d.name, d.note) for d in list_drives()], list(places.RECENT_SERVERS))
+
     def rebuild(self):
         icons = icon_cache()
         self.clear()
@@ -92,22 +98,40 @@ class Sidebar(QTreeWidget):
         for i, b in enumerate(self.config.bookmarks()):
             it = self._item(bm, b["name"], b["path"], "bookmark", icons.folder)
             it.setData(0, INDEX_ROLE, i)
-            if not os.path.isdir(b["path"]):
+            # don't probe network bookmarks here: an offline server would freeze the sidebar
+            if not places.is_remote(b["path"]) and not places.is_special(b["path"]) \
+                    and not os.path.isdir(b["path"]):
                 it.setForeground(0, Qt.GlobalColor.gray)
                 it.setToolTip(0, f"{b['path']} (not available)")
         if not self.config.bookmarks():
             hint = QTreeWidgetItem(bm, ["Ctrl+D bookmarks a folder"])
             hint.setFlags(Qt.ItemFlag.NoItemFlags)
-        places = self._section("Places")
+        sect = self._section("Places")
         for label, loc in PLACES:
             p = QStandardPaths.writableLocation(loc)
             if p and os.path.isdir(p):
-                self._item(places, label, os.path.normpath(p), "place", icons.folder)
+                self._item(sect, label, os.path.normpath(p), "place", icons.folder)
+
+        entries = list_drives()
+        self._sig = ([(d.path, d.name, d.note) for d in entries], list(places.RECENT_SERVERS))
+        cloud = [d for d in entries if d.kind == "cloud"]
+        local = [d for d in entries if d.kind not in ("cloud", "network")]
+        network = [d for d in entries if d.kind == "network"]
+        if cloud:
+            sect = self._section("Cloud")
+            for d in cloud:
+                self._item(sect, d.name, d.path, "cloud", icons.icon(d), f"{d.name}  —  {d.path}")
         pc = self._section("This PC", DRIVES)
-        drives = list_drives()
-        self._drive_sig = [(d.path, d.name) for d in drives]
-        for d in drives:
+        for d in local:
             self._item(pc, d.name, d.path, "drive", icons.icon(d), f"{d.path}  —  {d.note}")
+        net = self._section("Network", NETWORK, icons.network)
+        net.setData(0, KIND_ROLE, "network-root")
+        for d in network:
+            it = self._item(net, d.name, d.path, "netdrive", icons.network, f"{d.path}  —  {d.note}")
+            if d.note.startswith("Disconnected"):
+                it.setForeground(0, QColor(theme.colors()["dim"]))
+        for s in places.RECENT_SERVERS:
+            self._item(net, s[2:], s, "server", icons.network, s)
         self.expandAll()
         self.highlight(self._current)
 
@@ -116,20 +140,20 @@ class Sidebar(QTreeWidget):
         self.rebuild()
 
     def _check_drives(self):
-        sig = [(d.path, d.name) for d in list_drives()]
-        if sig != self._drive_sig:
+        if self._signature() != getattr(self, "_sig", None):
             self.rebuild()
 
     def highlight(self, path):
         self._current = path
         target = None
         if path:
-            key = path if path == DRIVES else os.path.normcase(path)
+            special = places.is_special(path)
+            key = path if special else os.path.normcase(path)
             for i in range(self.topLevelItemCount()):
                 top = self.topLevelItem(i)
                 for it in [top] + [top.child(j) for j in range(top.childCount())]:
                     p = it.data(0, PATH_ROLE)
-                    if p and (p == key if path == DRIVES else os.path.normcase(p) == key):
+                    if p and (p == key if special else os.path.normcase(p) == key):
                         target = it
                         break
                 if target:
@@ -171,10 +195,25 @@ class Sidebar(QTreeWidget):
             down.setEnabled(idx < len(self.config.bookmarks()) - 1)
             down.triggered.connect(lambda: self.config.move_bookmark(idx, 1))
             m.addAction("Remove bookmark").triggered.connect(lambda: self.config.remove_bookmark(path))
-        elif path != DRIVES and not self.config.is_bookmarked(path):
+        elif not places.is_special(path) and not self.config.is_bookmarked(path):
             m.addSeparator()
             m.addAction("Add bookmark").triggered.connect(lambda: self.config.add_bookmark(path))
+        if kind in ("network-root", "netdrive", "server"):
+            m.addSeparator()
+            m.addAction("Map network drive…").triggered.connect(self.mapDriveRequested)
+            if kind == "netdrive":
+                letter = path[:2]
+                m.addAction(f"Disconnect {letter}").triggered.connect(
+                    lambda: self.disconnectRequested.emit(letter))
+            if kind == "server":
+                m.addAction("Forget this computer").triggered.connect(lambda: self._forget(path))
         m.exec(self.viewport().mapToGlobal(pos))
+
+    def _forget(self, server):
+        if server in places.RECENT_SERVERS:
+            places.RECENT_SERVERS.remove(server)
+            self.config.set("recent_servers", list(places.RECENT_SERVERS))
+            self.rebuild()
 
     def _rename(self, idx, old):
         name, ok = QInputDialog.getText(self, "Rename bookmark", "Name:", text=old)
@@ -199,7 +238,7 @@ class Sidebar(QTreeWidget):
             dirs = [p for p in paths if os.path.isdir(p)]
             return ("bookmark", dirs, None) if dirs else None
         target = it.data(0, PATH_ROLE)
-        if not target or target == DRIVES or any(fileops.same_path(p, target) for p in paths):
+        if not target or places.is_special(target) or places.is_server(target) or any(fileops.same_path(p, target) for p in paths):
             return None
         return ("transfer", paths, target)
 

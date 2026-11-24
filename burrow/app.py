@@ -19,10 +19,22 @@ from .chrome import AddressArea, TabHost
 from .config import APP_NAME, Config
 from .folderview import FolderView, display_path, normalize_path, title_for
 from .inspector import Inspector
-from .model import DRIVES, human_size, icon_cache
+from . import places
+from .model import DRIVES, NETWORK, human_size, icon_cache
 from .sidebar import Sidebar
 
 HOME = os.path.expanduser("~")
+
+
+def is_location(p: str) -> bool:
+    """This PC, Network or a bare \\\\server: browsable, but not a folder you can put files in."""
+    return places.is_special(p) or places.is_server(p)
+
+
+def restorable(p: str) -> bool:
+    """Whether a saved tab can be reopened. Never waits on the network: remote tabs are
+    reopened and checked by their background load."""
+    return places.is_special(p) or places.is_remote(p) or os.path.isdir(p)
 
 
 class JobRunner(QObject):
@@ -80,12 +92,14 @@ class MainWindow(QMainWindow):
     def __init__(self, config: Config, paths: list[str]):
         super().__init__()
         self.config = config
+        places.RECENT_SERVERS[:] = [s for s in config.get("recent_servers") if places.is_server(s)][:8]
         self.jobs: list[JobRunner] = []
         self.closed_tabs: list[str] = []
         self.tree_actions: list[QAction] = []
         self.setWindowTitle(APP_NAME)
         self.resize(1320, 800)
-        self.setWindowIcon(icon_cache().folder)
+        if QApplication.windowIcon().isNull():
+            self.setWindowIcon(icon_cache().folder)
 
         self._make_actions()
         self._make_ui()
@@ -112,7 +126,7 @@ class MainWindow(QMainWindow):
         if config.get("window_state"):
             self.restoreState(QByteArray.fromHex(config.get("window_state").encode()))
 
-        start = paths or [p for p in config.get("session_tabs") if p == DRIVES or os.path.isdir(p)] or [HOME]
+        start = paths or [p for p in config.get("session_tabs") if restorable(p)] or [HOME]
         for p in start:
             self.new_tab(p, activate=False, after_current=False)
         cur = config.get("session_current") if not paths else 0
@@ -154,6 +168,9 @@ class MainWindow(QMainWindow):
         self.act_up = A("Up", self.go_up, "Alt+Up", icon=S(SP.SP_ArrowUp), tip="Up one level (Alt+Up)")
         self.act_home = A("Home", lambda: self.view().navigate(HOME), "Alt+Home")
         self.act_this_pc = A("This PC", lambda: self.view().navigate(DRIVES))
+        self.act_network = A("Network", lambda: self.view().navigate(NETWORK))
+        self.act_map_drive = A("Map network drive…", self.map_drive)
+        self.act_unmap_drive = A("Disconnect network drive…", self.disconnect_drive)
         self.act_refresh = A("Refresh", lambda: self.view().refresh(), "F5", icon=S(SP.SP_BrowserReload), tip="Refresh (F5)")
         self.act_address = A("Edit address", self.focus_address, ["Ctrl+L", "Alt+D", "F4"])
         self.act_filter = A("Filter…", lambda: self.view().focus_filter(), "Ctrl+F")
@@ -270,6 +287,8 @@ class MainWindow(QMainWindow):
         self.sidebar = Sidebar(self.config)
         self.sidebar.openRequested.connect(self._sidebar_open)
         self.sidebar.dropRequested.connect(self.transfer)
+        self.sidebar.mapDriveRequested.connect(self.map_drive)
+        self.sidebar.disconnectRequested.connect(self.disconnect_drive)
         self.side_dock = QDockWidget("Places")
         self.side_dock.setObjectName("sidebar")
         self.side_dock.setWidget(self.sidebar)
@@ -335,13 +354,15 @@ class MainWindow(QMainWindow):
         v.addAction(self.act_filter)
         v.addAction(self.act_refresh)
         g = mb.addMenu("&Go")
-        for a in (self.act_back, self.act_forward, self.act_up, self.act_home, self.act_this_pc, None,
+        for a in (self.act_back, self.act_forward, self.act_up, self.act_home, self.act_this_pc,
+                  self.act_network, None,
                   self.act_address, None, self.act_next_tab, self.act_prev_tab):
             g.addSeparator() if a is None else g.addAction(a)
         self.bookmarks_menu = mb.addMenu("&Bookmarks")
         self.bookmarks_menu.aboutToShow.connect(self._fill_bookmarks_menu)
         t = mb.addMenu("&Tools")
-        for a in (self.act_terminal, self.act_explorer, self.act_properties, None, self.act_settings):
+        for a in (self.act_terminal, self.act_explorer, self.act_properties, None,
+                  self.act_map_drive, self.act_unmap_drive, None, self.act_settings):
             t.addSeparator() if a is None else t.addAction(a)
         v.addAction(self.act_menubar)
 
@@ -450,7 +471,7 @@ class MainWindow(QMainWindow):
     def reopen_tab(self):
         while self.closed_tabs:
             p = self.closed_tabs.pop()
-            if p == DRIVES or os.path.isdir(p):
+            if restorable(p):
                 self.new_tab(p)
                 return
 
@@ -492,20 +513,29 @@ class MainWindow(QMainWindow):
         self.address_area.set_path(v.path, display_path(v.path))
         self.act_back.setEnabled(bool(v.back_stack))
         self.act_forward.setEnabled(bool(v.fwd_stack))
-        self.act_up.setEnabled(v.path != DRIVES)
-        marked = v.path != DRIVES and self.config.is_bookmarked(v.path)
+        self.act_up.setEnabled(v.parent_path() is not None)
+        marked = not places.is_special(v.path) and self.config.is_bookmarked(v.path)
         self.act_bookmark.setText("Remove bookmark" if marked else "Bookmark this folder")
-        self.act_bookmark.setEnabled(v.path != DRIVES)
+        self.act_bookmark.setEnabled(not places.is_special(v.path))
         self.sidebar.highlight(v.path)
         self.setWindowTitle(f"{title_for(v.path)} — {APP_NAME}")
-        free = ""
-        if v.path != DRIVES:
-            try:
-                du = shutil.disk_usage(v.path)
-                free = f"{human_size(du.free)} free of {human_size(du.total)}"
-            except OSError:
-                pass
-        self.status_right.setText(free)
+        self.status_right.setText("")
+        path = v.path
+        if not is_location(path):
+            def space():
+                du = shutil.disk_usage(path)
+                return f"{human_size(du.free)} free of {human_size(du.total)}"
+
+            def show(res, path=path):
+                if self.view() is not None and self.view().path == path and isinstance(res, str):
+                    self.status_right.setText(res)
+            if places.is_remote(path):
+                places.run_async(space, show)      # a network drive may answer slowly
+            else:
+                try:
+                    show(space())
+                except OSError:
+                    pass
         self._update_status()
         self.inspector_timer.start()
 
@@ -587,6 +617,10 @@ class MainWindow(QMainWindow):
         v = self.view()
         if text.lower() in ("this pc", "computer", "my computer", ""):
             v.navigate(DRIVES)
+        elif text.lower() == "network":
+            v.navigate(NETWORK)
+        elif text.startswith("\\\\") or places.is_remote(normalize_path(text)):
+            v.navigate(text)                    # checked by the background load, never blocks
         else:
             p = normalize_path(text)
             if os.path.isdir(p):
@@ -640,7 +674,7 @@ class MainWindow(QMainWindow):
             m.addAction(self.act_explorer)
             m.addAction(self.act_properties)
         else:
-            if v.path != DRIVES:
+            if not is_location(v.path):
                 for a in (self.act_paste, self.act_paste_tc, self.act_paste_builtin, None,
                           self.act_new_folder, self.act_new_file, None):
                     m.addSeparator() if a is None else m.addAction(a)
@@ -648,7 +682,7 @@ class MainWindow(QMainWindow):
             m.addAction(self.act_hidden)
             presets = m.addMenu("View presets (all folders)")
             dialogs.add_preset_actions(presets, self.config, self)
-            if v.path != DRIVES:
+            if not is_location(v.path):
                 m.addSeparator()
                 m.addAction(self.act_bookmark)
                 m.addAction(self.act_terminal)
@@ -679,14 +713,14 @@ class MainWindow(QMainWindow):
 
     def copy_path(self):
         es = self.view().selected_entries()
-        paths = [e.path for e in es] or ([self.view().path] if self.view().path != DRIVES else [])
+        paths = [e.path for e in es] or ([self.view().path] if not places.is_special(self.view().path) else [])
         if paths:
             QGuiApplication.clipboard().setText("\n".join(paths))
             self.statusBar().showMessage("Path copied", 3000)
 
     def paste(self, engine):
         v = self.view()
-        if v.path == DRIVES:
+        if is_location(v.path):
             return
         paths, cut = fileops.clipboard_paths()
         if not paths:
@@ -700,13 +734,13 @@ class MainWindow(QMainWindow):
         if not es:
             return
         dest = QFileDialog.getExistingDirectory(self, "Move to folder" if move else "Copy to folder",
-                                                self.view().path if self.view().path != DRIVES else HOME)
+                                                self.view().path if not is_location(self.view().path) else HOME)
         if dest:
             self.transfer([e.path for e in es], os.path.normpath(dest), move)
 
     def transfer(self, sources, target, move, engine=None) -> bool:
         """Copy or move sources into target, through TeraCopy or the built-in copier."""
-        if not target or target == DRIVES:
+        if not target or is_location(target):
             return False
         target = os.path.normpath(target)
         if not os.path.isdir(target):
@@ -835,7 +869,7 @@ class MainWindow(QMainWindow):
 
     def _create(self, name, is_dir):
         v = self.view()
-        if v.path == DRIVES:
+        if is_location(v.path):
             return
         p = fileops.free_name(v.path, name, is_dir)
         try:
@@ -870,13 +904,13 @@ class MainWindow(QMainWindow):
     def properties(self):
         v = self.view()
         es = v.selected_entries()
-        path = es[0].path if es else (v.path if v.path != DRIVES else None)
+        path = es[0].path if es else (v.path if not places.is_special(v.path) else None)
         if path:
             fileops.show_properties(path, int(self.winId()))
 
     def toggle_bookmark(self):
         p = self.view().path
-        if p == DRIVES:
+        if places.is_special(p):
             return
         if self.config.is_bookmarked(p):
             self.config.remove_bookmark(p)
@@ -887,7 +921,7 @@ class MainWindow(QMainWindow):
 
     def open_terminal(self):
         p = self.view().path
-        fileops.open_terminal(HOME if p == DRIVES else p)
+        fileops.open_terminal(HOME if is_location(p) else p)
 
     def show_in_explorer(self):
         v = self.view()
@@ -895,7 +929,26 @@ class MainWindow(QMainWindow):
         if es:
             fileops.show_in_explorer(es[0].path, select=True)
         else:
-            fileops.show_in_explorer("shell:MyComputerFolder" if v.path == DRIVES else v.path, select=False)
+            fileops.show_in_explorer({DRIVES: "shell:MyComputerFolder", NETWORK: "shell:NetworkPlacesFolder"}.get(v.path, v.path), select=False)
+
+    def map_drive(self):
+        places.map_drive_dialog(int(self.winId()))
+        self.sidebar.rebuild()
+        if self.view().path in (DRIVES, NETWORK):
+            self.view().refresh()
+
+    def disconnect_drive(self, letter=None):
+        if letter:
+            if QMessageBox.question(self, APP_NAME, f"Disconnect network drive {letter}?") \
+                    != QMessageBox.StandardButton.Yes:
+                return
+            if not places.disconnect(letter):
+                QMessageBox.warning(self, APP_NAME, f"Couldn't disconnect {letter}. Close any files open on it and try again.")
+        else:
+            places.disconnect_dialog(int(self.winId()))
+        self.sidebar.rebuild()
+        if self.view().path in (DRIVES, NETWORK):
+            self.view().refresh()
 
     def open_settings(self):
         dialogs.SettingsDialog(self.config, self).exec()
@@ -931,6 +984,11 @@ def main():
             pass
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    icon_path = os.path.join(base, "assets", "burrow.ico")
+    if os.path.isfile(icon_path):
+        from PySide6.QtGui import QIcon
+        app.setWindowIcon(QIcon(icon_path))
     config = Config()
     theme.apply(app, config.get("theme"))
     fileops.cleanup_temp()

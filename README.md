@@ -12,8 +12,21 @@ A tabbed file manager for Windows, written in Python with Qt (PySide6).
 - **Tabs**: Ctrl+T, Ctrl+W, Ctrl+Shift+T reopens a closed tab, middle-click a folder to open it in a new tab, and tabs are restored when you start Burrow again.
 - **Bookmarks sidebar** (Ctrl+D), plus common places and drives. Drop files on a sidebar entry to copy or move them there, or drop folders on "Bookmarks" to bookmark them.
 - **Inspector** (Alt+P): previews images and text files and shows file details: created, modified and accessed dates, attributes, and folder contents.
+- **Cloud drives**: OneDrive, iCloud Drive/Photos, Dropbox, Google Drive, Box and others are found through Windows' sync-root registry and shown in the sidebar and in This PC, with each provider's own icon. Files that are only in the cloud are never downloaded just to preview them.
+- **Network drives**: mapped drives show up (including remembered ones that are disconnected; opening one reconnects it), along with a **Network** page. Type `\\computer` to see its shared folders. Computers you open are remembered in the sidebar. *Tools ▸ Map network drive…* and *Disconnect…* use the standard Windows dialogs.
+- **Never freezes on the network**: network folders, share lists and free space load in the background, so a slow or offline server shows "Loading…" or an error instead of hanging the window.
+- **Light and dark themes** (they follow Windows by default), browser-style tabs, a clickable breadcrumb path, and the menus behind the ☰ button.
 
-## Run
+## Install (Windows .exe)
+
+```
+.\build.ps1
+.\install.ps1            # add -Desktop for a desktop shortcut
+```
+
+`build.ps1` makes `dist\Burrow\Burrow.exe` with PyInstaller. `install.ps1` copies it to `%LOCALAPPDATA%\Programs\Burrow`, adds a Start menu shortcut, and registers Burrow in *Settings ▸ Apps*, where it can be uninstalled. It installs for your user only, so no admin rights are needed.
+
+## Run from source
 
 ```
 run.bat [folder]

@@ -9,9 +9,9 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QAbstractItemView, QFrame, QHeaderView, QLabel, QLineEdit, QMenu,
                                QStyle, QStyledItemDelegate, QTreeView, QVBoxLayout, QWidget)
 
-from . import dialogs, fileops, theme
+from . import dialogs, fileops, places, theme
 from .config import COLUMN_TITLES, COLUMNS, DEFAULT_WIDTHS, Config
-from .model import DRIVES, ENTRY_ROLE, DirModel, Entry, FilterProxy
+from .model import DRIVES, ENTRY_ROLE, NETWORK, DirModel, Entry, FilterProxy
 
 
 _HOVER = QStyle.StateFlag.State_MouseOver
@@ -20,22 +20,33 @@ _FOCUS = QStyle.StateFlag.State_HasFocus
 
 
 def normalize_path(p: str) -> str:
-    if p == DRIVES:
-        return DRIVES
-    p = os.path.expandvars(os.path.expanduser(p.strip().strip('"')))
+    if p in (DRIVES, NETWORK):
+        return p
+    p = os.path.expandvars(os.path.expanduser(p.strip().strip('"'))).replace("/", "\\")
     if re.fullmatch(r"[A-Za-z]:", p):
         p += "\\"
+    m = re.fullmatch(r"\\\\([^\\]+)\\?", p)
+    if m:
+        return "\\\\" + m.group(1)                 # a server: \\host
     return os.path.normpath(os.path.abspath(p))
 
 
 def display_path(p: str) -> str:
-    return "This PC" if p == DRIVES else p
+    return {DRIVES: "This PC", NETWORK: "Network"}.get(p, p)
 
 
 def title_for(p: str) -> str:
-    if p == DRIVES:
-        return "This PC"
-    return os.path.basename(p) or p
+    if p in (DRIVES, NETWORK):
+        return display_path(p)
+    if places.is_server(p):
+        return p[2:]
+    return os.path.basename(p.rstrip("\\")) or p
+
+
+def _exists(p: str) -> bool:
+    """Existence check that never waits on the network: remote paths are checked by the
+    background load instead."""
+    return p in (DRIVES, NETWORK) or places.is_remote(p) or os.path.isdir(p)
 
 
 class RowDelegate(QStyledItemDelegate):
@@ -144,7 +155,8 @@ class FileTree(QTreeView):
         e = self.owner.proxy.entry(self.indexAt(pos))
         if e is not None and e.is_dir:
             return e.path
-        return None if self.owner.path == DRIVES else self.owner.path
+        p = self.owner.path
+        return None if (places.is_special(p) or places.is_server(p)) else p
 
     def _evaluate(self, ev):
         paths = self._paths(ev.mimeData())
@@ -182,6 +194,7 @@ class FileTree(QTreeView):
 
 class FolderView(QWidget):
     pathChanged = Signal(str)
+    loaded = Signal()
     selectionChanged = Signal()
     openInNewTab = Signal(str)
     statusMessage = Signal(str)
@@ -195,6 +208,8 @@ class FolderView(QWidget):
         self.fwd_stack: list[str] = []
         self._applying = False
         self.applied_version = -1
+        self._load_token = 0
+        self.loading = False
 
         self.model = DirModel(self)
         self.model.date_format = config.get("date_format")
@@ -285,7 +300,14 @@ class FolderView(QWidget):
     # ----- navigation -------------------------------------------------------------
     def navigate(self, path: str, record: bool = True, select: str | None = None) -> bool:
         path = normalize_path(path)
-        if path != DRIVES and not os.path.isdir(path):
+        if places.needs_reconnect(path):
+            # A remembered network drive that isn't connected: reconnect like Explorer does
+            # (Windows asks for credentials if it needs them).
+            self.statusMessage.emit(f"Reconnecting {path[:2]}…")
+            if not places.reconnect(path[:2], int(self.window().winId())):
+                self.statusMessage.emit(f"Couldn't reconnect {path[:2]}")
+                return False
+        if not _exists(path):
             self.statusMessage.emit(f"Folder not found: {path}")
             return False
         if record and self.path is not None and path != self.path:
@@ -297,18 +319,26 @@ class FolderView(QWidget):
         self.filter_edit.hide()
         self.filter_edit.blockSignals(False)
         self.proxy.set_filter("")
-        self._load([select] if select else [], select)
         if self.watcher.directories():
             self.watcher.removePaths(self.watcher.directories())
-        if path != DRIVES:
-            self.watcher.addPath(path)
+        self._load([select] if select else [], select, clear=True)
         self.pathChanged.emit(path)
         return True
+
+    def _watch(self):
+        """Watch the folder for changes. Called after a successful load: adding a watch on an
+        unreachable network path blocks for the whole network timeout."""
+        p = self.path
+        if places.is_special(p) or places.is_server(p) or p in self.watcher.directories():
+            return
+        if self.watcher.directories():
+            self.watcher.removePaths(self.watcher.directories())
+        self.watcher.addPath(p)
 
     def go_back(self):
         while self.back_stack:
             p = self.back_stack.pop()
-            if p == DRIVES or os.path.isdir(p):
+            if _exists(p):
                 self.fwd_stack.append(self.path)
                 prev = self.path
                 self.navigate(p, record=False, select=prev)
@@ -317,22 +347,33 @@ class FolderView(QWidget):
     def go_forward(self):
         while self.fwd_stack:
             p = self.fwd_stack.pop()
-            if p == DRIVES or os.path.isdir(p):
+            if _exists(p):
                 self.back_stack.append(self.path)
                 self.navigate(p, record=False)
                 return
 
+    def parent_path(self) -> str | None:
+        p = self.path
+        if p in (DRIVES, NETWORK) or p is None:
+            return None
+        if places.is_server(p):
+            return NETWORK
+        if places.is_unc(p):
+            drive, rest = os.path.splitdrive(p)          # \\server\share, \rest
+            if not rest.strip("\\"):
+                return "\\\\" + places.server_of(p)       # share -> server
+        parent = os.path.dirname(p)
+        return DRIVES if parent == p else parent
+
     def go_up(self):
-        if self.path == DRIVES:
-            return
-        parent = os.path.dirname(self.path)
-        child = self.path
-        self.navigate(DRIVES if parent == self.path else parent, select=child)
+        parent = self.parent_path()
+        if parent:
+            self.navigate(parent, select=self.path)
 
     def refresh(self):
         if self.path is None:
             return
-        if self.path != DRIVES and not os.path.isdir(self.path):
+        if not _exists(self.path):
             p = self.path
             while p and not os.path.isdir(p):
                 parent = os.path.dirname(p)
@@ -354,11 +395,41 @@ class FolderView(QWidget):
             return
         self.refresh()
 
-    def _load(self, select: list[str], current: str | None = None, scroll: int | None = None):
-        err = self.model.load(self.path, self.config.get("show_hidden"))
-        self.error_label.setVisible(bool(err))
-        if err:
-            self.error_label.setText(f"Can't open {self.path}: {err}")
+    def _load(self, select: list[str], current: str | None = None, scroll: int | None = None,
+              clear: bool = False):
+        """Local folders load inline (fast). Network locations load on a worker thread so a
+        slow or offline server never freezes the window."""
+        self._load_token += 1
+        token, path, hidden = self._load_token, self.path, self.config.get("show_hidden")
+        remote = places.is_remote(path) or places.is_server(path)
+        if not remote:
+            self._loaded(token, DirModel.fetch(path, hidden), select, current, scroll)
+            return
+        if clear:
+            self.model.set_entries(path, [])
+        self.loading = True
+        self._set_message("Loading…", error=False)
+        places.run_async(lambda: DirModel.fetch(path, hidden),
+                         lambda res: self._loaded(token, res, select, current, scroll))
+
+    def _set_message(self, text: str, error: bool = True):
+        self.error_label.setStyleSheet(
+            f"color: {'#d9534f' if error else theme.colors()['dim']}; padding: 8px 12px;")
+        self.error_label.setText(text)
+        self.error_label.setVisible(bool(text))
+
+    def _loaded(self, token, res, select, current, scroll):
+        if token != self._load_token:          # the user has moved on
+            return
+        self.loading = False
+        entries, err = res if isinstance(res, tuple) else ([], str(res))
+        self.model.set_entries(self.path, entries)
+        self._set_message(f"Can't open {display_path(self.path)}: {err}" if err else "")
+        if not err:
+            self._watch()
+            if places.remember_server(self.path):
+                self.config.set("recent_servers", list(places.RECENT_SERVERS))
+        self.loaded.emit()
         self.select_paths(select, current)
         if scroll is not None:
             self.tree.verticalScrollBar().setValue(scroll)
