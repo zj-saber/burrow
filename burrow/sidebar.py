@@ -96,7 +96,7 @@ class Sidebar(QTreeWidget):
         bm = self._section("Bookmarks")
         bm.setData(0, KIND_ROLE, "bookmarks")
         for i, b in enumerate(self.config.bookmarks()):
-            it = self._item(bm, b["name"], b["path"], "bookmark", icons.folder)
+            it = self._item(bm, b["name"], b["path"], "bookmark", icons.folder_icon(b["path"]))
             it.setData(0, INDEX_ROLE, i)
             # don't probe network bookmarks here: an offline server would freeze the sidebar
             if not places.is_remote(b["path"]) and not places.is_special(b["path"]) \
@@ -110,7 +110,7 @@ class Sidebar(QTreeWidget):
         for label, loc in PLACES:
             p = QStandardPaths.writableLocation(loc)
             if p and os.path.isdir(p):
-                self._item(sect, label, os.path.normpath(p), "place", icons.folder)
+                self._item(sect, label, os.path.normpath(p), "place", icons.folder_icon(p))
 
         entries = list_drives()
         self._sig = ([(d.path, d.name, d.note) for d in entries], list(places.RECENT_SERVERS))

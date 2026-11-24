@@ -133,7 +133,7 @@ class IconCache:
         elif e.is_drive:
             key = ("drive", e.path)
         elif e.is_dir:
-            return self.folder
+            return self.folder_icon(e.path, e.attrs)
         elif not e.ext:
             return self.file
         elif e.ext in self.PER_FILE:
@@ -147,6 +147,30 @@ class IconCache:
                 ic = self.drive if e.is_drive else self.file
             self._icons[key] = ic
         return ic
+
+    def folder_icon(self, path: str, attrs: int | None = None):
+        """Explorer's icon for a folder, including custom colors set through desktop.ini
+        (FolderPainter, Folcolor, Folder Colorizer...). Windows only reads desktop.ini on
+        folders marked Read-only or System, so every other folder gets the plain icon without
+        any disk access. Looked up once per folder (lazily, when a row is drawn) and cached;
+        network folders are skipped so drawing never waits on a server."""
+        if attrs is not None and not attrs & (ATTR_READONLY | ATTR_SYSTEM):
+            return self.folder
+        key = ("dir", os.path.normcase(path))
+        ic = self._icons.get(key)
+        if ic is None:
+            ic = self.folder
+            if not places.is_remote(path):
+                custom = self.provider.icon(QFileInfo(path))
+                if not custom.isNull():
+                    ic = custom
+            self._icons[key] = ic
+        return ic
+
+    def forget_folder_icons(self):
+        """Drop cached folder icons (after a manual refresh, so recolored folders update)."""
+        for k in [k for k in self._icons if k[0] == "dir"]:
+            del self._icons[k]
 
     def type_name(self, e: Entry) -> str:
         if e.is_drive:

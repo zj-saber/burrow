@@ -171,7 +171,7 @@ class MainWindow(QMainWindow):
         self.act_network = A("Network", lambda: self.view().navigate(NETWORK))
         self.act_map_drive = A("Map network drive…", self.map_drive)
         self.act_unmap_drive = A("Disconnect network drive…", self.disconnect_drive)
-        self.act_refresh = A("Refresh", lambda: self.view().refresh(), "F5", icon=S(SP.SP_BrowserReload), tip="Refresh (F5)")
+        self.act_refresh = A("Refresh", self.refresh_view, "F5", icon=S(SP.SP_BrowserReload), tip="Refresh (F5)")
         self.act_address = A("Edit address", self.focus_address, ["Ctrl+L", "Alt+D", "F4"])
         self.act_filter = A("Filter…", lambda: self.view().focus_filter(), "Ctrl+F")
         self.act_new_tab = A("New tab", lambda: self.new_tab(), "Ctrl+T")
@@ -931,6 +931,11 @@ class MainWindow(QMainWindow):
             fileops.show_in_explorer(es[0].path, select=True)
         else:
             fileops.show_in_explorer({DRIVES: "shell:MyComputerFolder", NETWORK: "shell:NetworkPlacesFolder"}.get(v.path, v.path), select=False)
+
+    def refresh_view(self):
+        icon_cache().forget_folder_icons()      # pick up folders recolored in Explorer
+        self.view().refresh()
+        self.view().tree.viewport().update()
 
     def map_drive(self):
         places.map_drive_dialog(int(self.winId()))

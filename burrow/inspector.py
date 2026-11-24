@@ -166,7 +166,7 @@ class Inspector(QWidget):
                            "in the address bar to browse another one." if folder == NETWORK
                            else "Shared folders on this computer.")
             return
-        self._set_icon(icons.folder)
+        self._set_icon(icons.folder_icon(folder))
         self.title.setText(os.path.basename(folder.rstrip("\\")) or folder)
         self._row("Location", folder)
         if places.is_remote(folder):
