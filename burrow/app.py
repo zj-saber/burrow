@@ -382,8 +382,12 @@ class MainWindow(QMainWindow):
         self.config.set("show_menubar", on)
 
     def apply_theme(self):
-        c = theme.apply(QApplication.instance(), self.config.get("theme"))
-        self._theme_key = (self.config.get("theme"), c["name"])
+        c = theme.apply(QApplication.instance(), self.config.get("theme"), self.config.get("palette"))
+        self._theme_key = (self.config.get("theme"), c["name"], self.config.get("palette"))
+        tf = QApplication.font()                 # inspector title follows the theme font
+        tf.setBold(True)
+        tf.setPointSizeF(tf.pointSizeF() * 1.15)
+        self.inspector.title.setFont(tf)
         self.tabstrip.setStyleSheet(theme.tabstrip_qss(c))
         self.navbar.setStyleSheet(theme.navbar_qss(c))
         self.statusBar().setStyleSheet(theme.statusbar_qss(c))
@@ -574,7 +578,7 @@ class MainWindow(QMainWindow):
 
     def _settings_changed(self):
         self.act_hidden.setChecked(self.config.get("show_hidden"))
-        if (self.config.get("theme"), theme.resolve(self.config.get("theme"))) != self._theme_key:
+        if (self.config.get("theme"), theme.resolve(self.config.get("theme")), self.config.get("palette")) != self._theme_key:
             self.apply_theme()
         key = (self.config.get("show_hidden"), self.config.get("date_format"), self.config.get("everything_sizes"))
         if key != getattr(self, "_listing_key", None):     # only re-list when it matters
@@ -996,7 +1000,7 @@ def main():
         from PySide6.QtGui import QIcon
         app.setWindowIcon(QIcon(icon_path))
     config = Config()
-    theme.apply(app, config.get("theme"))
+    theme.apply(app, config.get("theme"), config.get("palette"))
     fileops.cleanup_temp()
     paths = [normalize_path(a) for a in sys.argv[1:] if os.path.isdir(a)]
     win = MainWindow(config, paths)

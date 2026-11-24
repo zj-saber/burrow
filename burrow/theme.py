@@ -10,7 +10,7 @@ from __future__ import annotations
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QGuiApplication, QIcon, QPainter, QPalette, QPixmap
 
-THEMES = {
+_BURROW = {
     "dark": {
         "window": "#1b1c1f", "base": "#151618", "panel": "#1b1c1f", "text": "#e3e4e6",
         "dim": "#8a8d93", "border": "#2a2c31", "accent": "#4d8dff", "select": "#24406f",
@@ -23,7 +23,48 @@ THEMES = {
     },
 }
 
-_current: dict = dict(THEMES["light"], name="light")
+# Inspired by "Primary" for Obsidian (Cecilia May): warm paper tones in light mode, espresso
+# browns in dark mode, a muted tan accent, Inter for the interface. Colors are taken from
+# Primary's own gray scale (--color-l-gray-* / --color-d-gray-*) and used the way Primary uses
+# them: content on background-primary, sidebar and chrome on background-secondary.
+_PRIMARY = {
+    "light": {
+        "window": "#eee7dd",   # l-gray-40  background-secondary
+        "base": "#f8f5f1",     # l-gray-20  background-primary
+        "panel": "#eee7dd",
+        "text": "#593e22",     # l-gray-130 text-normal
+        "dim": "#836b49",      # l-gray-100 text-muted
+        "border": "#e4d7c3",   # l-gray-60  background-modifier-border
+        "accent": "#ac9379",   # accent-1 (h31 s23% l50% x1.15)
+        "select": "#e6dccb", "select_inactive": "#efe8de",
+        "hover": "#f2ece3",    # l-gray-30
+        "chip": "#ebe3d6",     # l-gray-50
+        "seltext": "#432e14",  # l-gray-140
+        "font": "Inter",
+    },
+    "dark": {
+        "window": "#26211c",   # d-gray-120 background-secondary
+        "base": "#2e261f",     # d-gray-100 background-primary
+        "panel": "#26211c",
+        "text": "#d7c0a3",     # d-gray-20  text-normal
+        "dim": "#ab916d",      # d-gray-40  text-muted
+        "border": "#3b3026",   # d-gray-80  background-modifier-border
+        "accent": "#917959",   # d-gray-50, the visible tan of the dark accent
+        "select": "#51402f",   # d-gray-70
+        "select_inactive": "#3b3026",
+        "hover": "#342c23",    # d-gray-90
+        "chip": "#3b3026",     # d-gray-80
+        "seltext": "#ebdac6",  # d-gray-10
+        "font": "Inter",
+    },
+}
+
+PALETTES = {"burrow": _BURROW, "primary": _PRIMARY}
+PALETTE_NAMES = {"burrow": "Burrow (cool blue)", "primary": "Primary (warm, inspired by the Obsidian theme)"}
+THEMES = _BURROW                       # kept for callers that only need the default palette
+
+_current: dict = dict(_BURROW["light"], name="light", palette="burrow")
+_default_font = None
 
 
 def colors() -> dict:
@@ -68,13 +109,24 @@ def _palette(c: dict) -> QPalette:
     return p
 
 
-def apply(app, mode: str) -> dict:
-    global _current
+def apply(app, mode: str, palette: str = "burrow") -> dict:
+    global _current, _default_font
     name = resolve(mode)
-    _current = dict(THEMES[name], name=name)
+    pal = PALETTES.get(palette, _BURROW)
+    _current = dict(pal[name], name=name, palette=palette if palette in PALETTES else "burrow")
     if app.style().name().lower() != "fusion":
         app.setStyle("Fusion")
     app.setPalette(_palette(_current))
+    # Interface font: the palette's own (Inter for Primary) when installed, else the system font.
+    if _default_font is None:
+        _default_font = QFont(app.font())
+    family = _current.get("font")
+    if family and family in QFontDatabase.families():
+        f = QFont(_default_font)
+        f.setFamily(family)
+        app.setFont(f)
+    else:
+        app.setFont(_default_font)
     _icon_cache.clear()
     return _current
 
@@ -98,7 +150,7 @@ def _icon_family() -> str:
 
 
 def icon(name: str, size: int = 16) -> QIcon:
-    key = (name, size, _current["name"])
+    key = (name, size, _current["name"], _current.get("palette"))
     ic = _icon_cache.get(key)
     if ic is not None:
         return ic

@@ -16,7 +16,7 @@ A tabbed file manager for Windows, written in Python with Qt (PySide6).
 - **Network drives**: mapped drives show up (including remembered ones that are disconnected; opening one reconnects it), along with a **Network** page. Type `\\computer` to see its shared folders. Computers you open are remembered in the sidebar. *Tools ▸ Map network drive…* and *Disconnect…* use the standard Windows dialogs.
 - **Folder sizes from Everything (voidtools)**: when Everything is running, folder sizes fill the Size column a few milliseconds after a folder opens. You can sort by them, and they show in the inspector and status bar. Burrow talks to Everything's built-in IPC directly, so no SDK DLL is needed. Turn on *Index folder size* in Everything (*Tools ▸ Options ▸ Indexes*). You can switch it off in Settings.
 - **Never freezes on the network**: network folders, share lists and free space load in the background, so a slow or offline server shows "Loading…" or an error instead of hanging the window.
-- **Light and dark themes** (they follow Windows by default), browser-style tabs, a clickable breadcrumb path, and the menus behind the ☰ button.
+- **Light and dark themes** in two color sets: Burrow (cool blue) and **Primary**, a warm palette inspired by the Obsidian theme of the same name. Pick them in *Settings ▸ Colors*. They follow Windows light/dark by default, browser-style tabs, a clickable breadcrumb path, and the menus behind the ☰ button.
 
 ## Install (Windows .exe)
 

@@ -86,6 +86,7 @@ DEFAULTS = {
     "new_tab_path": "",
     "date_format": DATE_FORMATS[0],
     "theme": "system",
+    "palette": "burrow",
     "everything_sizes": True,
     "show_menubar": False,
     "bookmarks": [],

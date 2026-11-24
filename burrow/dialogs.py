@@ -204,6 +204,12 @@ class SettingsDialog(QDialog):
             self.theme.addItem(label, key)
         self.theme.setCurrentIndex(max(self.theme.findData(config.get("theme")), 0))
         gen.addRow("Theme:", self.theme)
+        from . import theme as _theme
+        self.palette = QComboBox()
+        for key, label in _theme.PALETTE_NAMES.items():
+            self.palette.addItem(label, key)
+        self.palette.setCurrentIndex(max(self.palette.findData(config.get("palette")), 0))
+        gen.addRow("Colors:", self.palette)
         gen.addRow(self.show_hidden)
         gen.addRow(self.confirm)
         gen.addRow("New tabs open:", nt_row)
@@ -256,6 +262,7 @@ class SettingsDialog(QDialog):
             "new_tab_path": self.new_tab.text().strip(),
             "date_format": self.date_fmt.currentData(),
             "theme": self.theme.currentData(),
+            "palette": self.palette.currentData(),
             "everything_sizes": self.ev_sizes.isChecked(),
         })
         self.accept()
