@@ -164,6 +164,21 @@ class SettingsDialog(QDialog):
         note.setWordWrap(True)
         tc.addRow(note)
 
+        # Everything (voidtools)
+        ev_box = QGroupBox("Everything (voidtools)")
+        ev = QFormLayout(ev_box)
+        self.ev_sizes = QCheckBox("Show folder sizes from Everything")
+        self.ev_sizes.setChecked(config.get("everything_sizes"))
+        from . import everything
+        running = everything.is_running()
+        ev_status = QLabel(
+            "✓ Everything is running. Folder sizes need “Index folder size” turned on in Everything "
+            "(Tools ▸ Options ▸ Indexes)." if running else
+            "⚠ Everything isn't running. Start it (voidtools.com) and folder sizes appear automatically.")
+        ev_status.setWordWrap(True)
+        ev.addRow(self.ev_sizes)
+        ev.addRow(ev_status)
+
         # General
         gen_box = QGroupBox("General")
         gen = QFormLayout(gen_box)
@@ -199,6 +214,7 @@ class SettingsDialog(QDialog):
         buttons.rejected.connect(self.reject)
         lay = QVBoxLayout(self)
         lay.addWidget(tc_box)
+        lay.addWidget(ev_box)
         lay.addWidget(gen_box)
         lay.addWidget(buttons)
         self._update_tc_status()
@@ -240,5 +256,6 @@ class SettingsDialog(QDialog):
             "new_tab_path": self.new_tab.text().strip(),
             "date_format": self.date_fmt.currentData(),
             "theme": self.theme.currentData(),
+            "everything_sizes": self.ev_sizes.isChecked(),
         })
         self.accept()

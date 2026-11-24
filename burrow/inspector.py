@@ -9,7 +9,7 @@ from PySide6.QtGui import QFontDatabase, QImageReader, QPixmap
 from PySide6.QtWidgets import (QFormLayout, QLabel, QPlainTextEdit, QSizePolicy, QVBoxLayout,
                                QWidget)
 
-from . import places
+from . import everything, places
 from .model import CLOUD_ONLY, DRIVES, NETWORK, Entry, attr_string, human_size, icon_cache
 
 TEXT_EXTS = set("""txt md markdown log ini cfg conf toml yaml yml json jsonc xml html htm css scss less
@@ -77,7 +77,11 @@ class Inspector(QWidget):
         self.lay.addStretch(1)
 
     # ----- helpers -------------------------------------------------------------
+    use_everything = True
+    _shown = None
+
     def _reset(self):
+        self._shown = None
         while self.form.rowCount():
             self.form.removeRow(0)
         self._pix = None
@@ -136,14 +140,15 @@ class Inspector(QWidget):
             self._show_folder(folder)
         elif len(entries) > 1:
             self._set_icon(icons.file)
-            dirs = sum(1 for e in entries if e.is_dir)
+            dirs = [e for e in entries if e.is_dir]
             files = [e for e in entries if not e.is_dir]
             self.title.setText(f"{len(entries):,} items selected")
-            self._row("Folders", f"{dirs:,}" if dirs else "")
+            self._row("Folders", f"{len(dirs):,}" if dirs else "")
             self._row("Files", f"{len(files):,}" if files else "")
-            if files:
-                total = sum(e.size or 0 for e in files)
-                self._row("Size", human_size(total) + (" (files only)" if dirs else ""))
+            sized = [e for e in entries if e.size is not None and not e.is_drive]
+            if sized:
+                partial = len(sized) < len(entries)
+                self._row("Size", human_size(sum(e.size for e in sized)) + (" (files only)" if partial else ""))
         else:
             self._show_entry(entries[0])
 
@@ -168,12 +173,27 @@ class Inspector(QWidget):
             self._row("Contents", "On a network location")
             return                              # don't scan a share on the GUI thread
         self._folder_counts(folder)
+        self._everything_size(folder)
         try:
             st = os.stat(folder)
             self._row("Created", _fmt_time(getattr(st, "st_birthtime", None) or st.st_ctime))
             self._row("Modified", _fmt_time(st.st_mtime))
         except OSError:
             pass
+
+    def _everything_size(self, folder: str):
+        """Size of the folder being shown, from Everything; added when the answer arrives."""
+        if not self.use_everything:
+            return
+        c = everything.client()
+        if c is None:
+            return
+        self._shown = folder
+
+        def got(size, folder=folder):
+            if size is not None and self._shown == folder:
+                self._row("Size", f"{human_size(size)} ({size:,} bytes)")
+        c.size_of(folder, got)
 
     def _folder_counts(self, path: str):
         dirs = files = 0
@@ -213,8 +233,8 @@ class Inspector(QWidget):
             return
         remote = places.is_remote(e.path)
         self._row("Type", icons.type_name(e))
-        if not e.is_dir:
-            self._row("Size", f"{human_size(e.size)} ({e.size:,} bytes)" if e.size and e.size >= 1024
+        if e.size is not None:                  # files, and folders sized by Everything
+            self._row("Size", f"{human_size(e.size)} ({e.size:,} bytes)" if e.size >= 1024
                       else human_size(e.size))
         self._row("Location", os.path.dirname(e.path))
         if e.is_dir and not remote:

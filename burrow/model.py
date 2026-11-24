@@ -275,6 +275,23 @@ class DirModel(QAbstractTableModel):
         self._sort_entries()
         self.endResetModel()
 
+    def set_folder_sizes(self, sizes: dict):
+        """Fill in folder sizes ({normcased path: bytes}) without reloading the listing."""
+        changed = False
+        for e in self.entries:
+            if e.is_dir and not e.is_drive:
+                s = sizes.get(os.path.normcase(e.path))
+                if s is not None and s != e.size:
+                    e.size = s
+                    changed = True
+        if not changed:
+            return
+        col = COLUMNS.index("size")
+        self.dataChanged.emit(self.index(0, col), self.index(len(self.entries) - 1, col))
+        if COLUMNS[self.sort_column] == "size":
+            order = Qt.SortOrder.DescendingOrder if self.sort_desc else Qt.SortOrder.AscendingOrder
+            self.sort(self.sort_column, order)
+
     def _key(self, col: str):
         if col == "size":
             return lambda e: (e.size if e.size is not None else -1, e.nkey)
@@ -346,7 +363,7 @@ class DirModel(QAbstractTableModel):
             if col == "name":
                 return e.name
             if col == "size":
-                return "" if (e.is_dir and not e.is_drive) else human_size(e.size)
+                return human_size(e.size)        # folders too, once Everything has sized them
             if col == "type":
                 return self.icons.type_name(e)
             if col == "modified":

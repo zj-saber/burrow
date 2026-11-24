@@ -9,7 +9,7 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QAbstractItemView, QFrame, QHeaderView, QLabel, QLineEdit, QMenu,
                                QStyle, QStyledItemDelegate, QTreeView, QVBoxLayout, QWidget)
 
-from . import dialogs, fileops, places, theme
+from . import dialogs, everything, fileops, places, theme
 from .config import COLUMN_TITLES, COLUMNS, DEFAULT_WIDTHS, Config
 from .model import DRIVES, ENTRY_ROLE, NETWORK, DirModel, Entry, FilterProxy
 
@@ -429,6 +429,7 @@ class FolderView(QWidget):
             self._watch()
             if places.remember_server(self.path):
                 self.config.set("recent_servers", list(places.RECENT_SERVERS))
+            self._request_folder_sizes(token)
         self.loaded.emit()
         self.select_paths(select, current)
         if scroll is not None:
@@ -436,6 +437,22 @@ class FolderView(QWidget):
         elif not select:
             self.tree.scrollToTop()
         self.selectionChanged.emit()
+
+    def _request_folder_sizes(self, token):
+        """Ask Everything (voidtools) for the sizes of this folder's subfolders. The answer
+        comes back a few ms later through the event loop; nothing waits for it."""
+        if not self.config.get("everything_sizes") or places.is_special(self.path) \
+                or places.is_server(self.path) or not any(e.is_dir for e in self.model.entries):
+            return
+        c = everything.client()
+        if c is None:
+            return
+
+        def got(sizes, token=token):
+            if token == self._load_token and sizes:
+                self.model.set_folder_sizes(sizes)
+                self.selectionChanged.emit()          # refresh status bar and inspector
+        c.folder_sizes(self.path, got)
 
     def apply_settings(self):
         self.model.date_format = self.config.get("date_format")

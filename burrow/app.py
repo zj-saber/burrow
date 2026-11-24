@@ -105,7 +105,7 @@ class MainWindow(QMainWindow):
         self._make_ui()
         self._make_menus()
         self.apply_theme()
-        self._listing_key = (config.get("show_hidden"), config.get("date_format"))
+        self._listing_key = (config.get("show_hidden"), config.get("date_format"), config.get("everything_sizes"))
         try:
             QGuiApplication.styleHints().colorSchemeChanged.connect(self._system_scheme_changed)
         except AttributeError:
@@ -547,10 +547,10 @@ class MainWindow(QMainWindow):
         parts = [f"{shown:,} items" if shown == total else f"{shown:,} of {total:,} items (filtered)"]
         sel = v.selected_entries()
         if sel:
-            files = [e for e in sel if not e.is_dir]
+            sized = [e for e in sel if e.size is not None and not e.is_drive]   # folders sized by Everything count too
             s = f"{len(sel):,} selected"
-            if files:
-                s += f" · {human_size(sum(e.size or 0 for e in files))}"
+            if sized:
+                s += f" · {human_size(sum(e.size for e in sized))}"
             parts.append(s)
         self.status_left.setText("     ".join(parts))
 
@@ -559,6 +559,7 @@ class MainWindow(QMainWindow):
             return
         v = self.view()
         if v is not None:
+            self.inspector.use_everything = bool(self.config.get("everything_sizes"))
             self.inspector.show_entries(v.selected_entries(), v.path)
 
     def _sync_preset_combo(self):
@@ -575,7 +576,7 @@ class MainWindow(QMainWindow):
         self.act_hidden.setChecked(self.config.get("show_hidden"))
         if (self.config.get("theme"), theme.resolve(self.config.get("theme"))) != self._theme_key:
             self.apply_theme()
-        key = (self.config.get("show_hidden"), self.config.get("date_format"))
+        key = (self.config.get("show_hidden"), self.config.get("date_format"), self.config.get("everything_sizes"))
         if key != getattr(self, "_listing_key", None):     # only re-list when it matters
             self._listing_key = key
             for v in self.views():
