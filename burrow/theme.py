@@ -136,6 +136,7 @@ GLYPHS = {
     "back": "", "forward": "", "up": "", "refresh": "",
     "settings": "", "inspector": "", "menu": "", "add": "",
     "sidebar": "", "close": "", "chevron": "",
+    "play": "", "pause": "", "volume": "", "mute": "",
 }
 _icon_font_family: str | None = None
 _icon_cache: dict = {}

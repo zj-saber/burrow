@@ -22,7 +22,9 @@ New-Item -ItemType Directory -Force assets | Out-Null
     --exclude-module PySide6.QtWebEngineWidgets `
     --exclude-module PySide6.QtQml `
     --exclude-module PySide6.QtQuick `
-    --exclude-module PySide6.QtMultimedia `
+    --exclude-module PySide6.QtMultimediaQuick `
+    --hidden-import PySide6.QtMultimedia `
+    --hidden-import PySide6.QtMultimediaWidgets `
     --exclude-module PySide6.Qt3DCore `
     --exclude-module PySide6.QtCharts `
     --exclude-module PySide6.QtPdf `

@@ -120,6 +120,9 @@ class FileTree(QTreeView):
     def keyPressEvent(self, ev):
         mods = ev.modifiers() & ~(Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.KeypadModifier)
         text = ev.text()
+        if (ev.key() == Qt.Key.Key_Space and not self.owner.filter_text() and mods == Qt.KeyboardModifier.NoModifier
+                and self.owner.space_handler is not None and self.owner.space_handler()):
+            return                                  # Space played/paused the media preview
         if ev.key() == Qt.Key.Key_Escape and self.owner.filter_text():
             self.owner.clear_filter()
             return
@@ -209,6 +212,7 @@ class FolderView(QWidget):
         self._applying = False
         self.applied_version = -1
         self._load_token = 0
+        self.space_handler = None          # set by the window: Space plays media previews
         self.loading = False
 
         self.model = DirModel(self)

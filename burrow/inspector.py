@@ -10,13 +10,14 @@ from PySide6.QtWidgets import (QFormLayout, QLabel, QPlainTextEdit, QSizePolicy,
                                QWidget)
 
 from . import everything, places
+from .media import AUDIO_EXTS, VIDEO_EXTS, MediaPreview
 from .model import CLOUD_ONLY, DRIVES, NETWORK, Entry, attr_string, human_size, icon_cache
 
 TEXT_EXTS = set("""txt md markdown log ini cfg conf toml yaml yml json jsonc xml html htm css scss less
 js mjs cjs ts tsx jsx py pyw pyi c h cpp hpp cc cs java kt kts go rs rb php pl lua sh bash zsh ps1
 psm1 psd1 bat cmd sql csv tsv env gitignore gitattributes editorconfig properties gradle swift m mm
 r dart vue svelte tex rst srt vtt nfo reg inf diff patch""".split())
-BINARY_EXTS = set("""exe dll sys msi zip 7z rar gz bz2 xz tar iso img bin dat db sqlite mp3 mp4 mkv
+BINARY_EXTS = VIDEO_EXTS | AUDIO_EXTS | set("""exe dll sys msi zip 7z rar gz bz2 xz tar iso img bin dat db sqlite mp3 mp4 mkv
 avi mov wav flac ogg m4a pdf doc docx xls xlsx ppt pptx psd ttf otf woff woff2 class jar pyc""".split())
 TEXT_LIMIT = 256 * 1024
 
@@ -69,12 +70,18 @@ class Inspector(QWidget):
         self.lay = QVBoxLayout(self)
         self.lay.setContentsMargins(16, 16, 16, 12)
         self.lay.setSpacing(8)
+        self.media = MediaPreview(self)
+        self.media.metadataReady.connect(self._media_info)
+        self.media.failed.connect(self._set_note)
+        self.media.coverShown.connect(lambda: (self.preview.clear(), self.preview.setFixedHeight(0)))
         self.lay.addWidget(self.preview)
+        self.lay.addWidget(self.media)
         self.lay.addWidget(self.title)
         self.lay.addWidget(self.details)
         self.lay.addWidget(self.note)
         self.lay.addWidget(self.text, 0)
         self.lay.addStretch(1)
+        self._stretch_index = self.lay.count() - 1
 
     # ----- helpers -------------------------------------------------------------
     use_everything = True
@@ -82,6 +89,7 @@ class Inspector(QWidget):
 
     def _reset(self):
         self._shown = None
+        self.media.unload()
         while self.form.rowCount():
             self.form.removeRow(0)
         self._pix = None
@@ -104,8 +112,8 @@ class Inspector(QWidget):
 
     def _show_text(self, on: bool):
         self.text.setVisible(on)
-        self.lay.setStretch(4, 1 if on else 0)
-        self.lay.setStretch(5, 0 if on else 1)
+        self.lay.setStretchFactor(self.text, 1 if on else 0)
+        self.lay.setStretch(self._stretch_index, 0 if on else 1)
 
     def _set_note(self, text: str):
         self.note.setText(text)
@@ -254,8 +262,34 @@ class Inspector(QWidget):
             return
         if e.ext in self._img_exts:
             self._preview_image(e)
+        elif e.ext in VIDEO_EXTS or e.ext in AUDIO_EXTS:
+            self._preview_media(e)
         elif e.ext in TEXT_EXTS or (e.ext not in BINARY_EXTS and (e.size or 0) <= 4 * 1024 * 1024):
             self._preview_text(e)
+
+    def _preview_media(self, e: Entry):
+        """Video or audio player in place of the image preview. Nothing plays until asked."""
+        video = e.ext in VIDEO_EXTS
+        if not video:
+            self._set_icon(icon_cache().icon(e))
+        else:
+            self.preview.clear()
+            self.preview.setFixedHeight(0)
+        self._shown = e.path
+        self.media.load(e.path, video)
+
+    def _media_info(self, info: dict):
+        if self._shown != self.media._path:
+            return
+        for k in ("Title", "Artist", "Album", "Track", "Genre", "Duration", "Video", "Codecs", "Bitrate"):
+            if info.get(k):
+                self._row(k, info[k])
+
+    def toggle_media(self) -> bool:
+        if self.media.is_active():
+            self.media.toggle()
+            return True
+        return False
 
     def _preview_image(self, e: Entry):
         reader = QImageReader(e.path)

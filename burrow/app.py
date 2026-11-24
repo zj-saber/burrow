@@ -301,7 +301,7 @@ class MainWindow(QMainWindow):
         self.insp_dock.setWidget(self.inspector)
         self.insp_dock.setTitleBarWidget(QWidget())
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.insp_dock)
-        self.insp_dock.visibilityChanged.connect(lambda vis: vis and self.inspector_timer.start())
+        self.insp_dock.visibilityChanged.connect(self._inspector_visibility)
         self._docks_sized = bool(self.config.get("window_state"))
 
         self.act_inspector = self.insp_dock.toggleViewAction()
@@ -377,6 +377,15 @@ class MainWindow(QMainWindow):
         self.act_menubar.setChecked(show_mb)
         mb.setVisible(show_mb)
 
+    def _inspector_visibility(self, visible):
+        if visible:
+            self.inspector_timer.start()
+        else:
+            self.inspector.media.unload()       # don't keep playing in a hidden panel
+
+    def _space_pressed(self) -> bool:
+        return self.insp_dock.isVisible() and self.inspector.toggle_media()
+
     def _toggle_menubar(self, on):
         self.menuBar().setVisible(on)
         self.config.set("show_menubar", on)
@@ -392,6 +401,7 @@ class MainWindow(QMainWindow):
         self.navbar.setStyleSheet(theme.navbar_qss(c))
         self.statusBar().setStyleSheet(theme.statusbar_qss(c))
         self.inspector.setStyleSheet(theme.inspector_qss(c))
+        self.inspector.media.apply_theme()
         self.sidebar.apply_theme(c)
         for v in self.views():
             v.apply_theme(c)
@@ -454,6 +464,7 @@ class MainWindow(QMainWindow):
         v.statusMessage.connect(lambda msg: self.statusBar().showMessage(msg, 6000))
         v.contextMenuRequested.connect(lambda pos, v=v: self._context_menu(v, pos))
         v.tree.dropRequested.connect(self.transfer)
+        v.space_handler = self._space_pressed
         if not v.navigate(path, record=False):
             v.navigate(HOME, record=False)
         idx = self.tabs.currentIndex() + 1 if after_current and self.tabs.count() else self.tabs.count()
