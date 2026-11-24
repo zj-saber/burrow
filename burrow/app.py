@@ -9,12 +9,13 @@ import sys
 from PySide6.QtCore import QByteArray, QDir, QEvent, QObject, QThread, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (QApplication, QComboBox, QCompleter, QDockWidget, QFileDialog,
-                               QFileSystemModel, QLabel, QLineEdit, QMainWindow, QMenu,
-                               QMessageBox, QProgressDialog, QStyle, QTabWidget, QToolBar,
-                               QToolButton)
+                               QFileSystemModel, QHBoxLayout, QLabel, QMainWindow, QMenu,
+                               QMessageBox, QProgressDialog, QSizePolicy, QStyle, QToolButton,
+                               QVBoxLayout, QWidget)
 from PySide6.QtCore import QItemSelection, QItemSelectionModel
 
-from . import dialogs, fileops
+from . import dialogs, fileops, theme
+from .chrome import AddressArea, TabHost
 from .config import APP_NAME, Config
 from .folderview import FolderView, display_path, normalize_path, title_for
 from .inspector import Inspector
@@ -22,20 +23,6 @@ from .model import DRIVES, human_size, icon_cache
 from .sidebar import Sidebar
 
 HOME = os.path.expanduser("~")
-
-
-class AddressBar(QLineEdit):
-    escaped = Signal()
-
-    def keyPressEvent(self, ev):
-        if ev.key() == Qt.Key.Key_Escape:
-            self.escaped.emit()
-            return
-        super().keyPressEvent(ev)
-
-    def focusInEvent(self, ev):
-        super().focusInEvent(ev)
-        QTimer.singleShot(0, self.selectAll)
 
 
 class JobRunner(QObject):
@@ -103,6 +90,12 @@ class MainWindow(QMainWindow):
         self._make_actions()
         self._make_ui()
         self._make_menus()
+        self.apply_theme()
+        self._listing_key = (config.get("show_hidden"), config.get("date_format"))
+        try:
+            QGuiApplication.styleHints().colorSchemeChanged.connect(self._system_scheme_changed)
+        except AttributeError:
+            pass
 
         self.inspector_timer = QTimer(self)
         self.inspector_timer.setSingleShot(True)
@@ -199,34 +192,51 @@ class MainWindow(QMainWindow):
         self.act_properties = T("Properties", self.properties, "Alt+Return")
         self.act_back_key = T("Back", self.backspace, "Backspace")
 
+    def _tool_button(self, action, parent):
+        b = QToolButton(parent)
+        b.setDefaultAction(action)
+        b.setAutoRaise(True)
+        b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        return b
+
     def _make_ui(self):
-        self.tabs = QTabWidget()
-        self.tabs.setDocumentMode(True)
-        self.tabs.setTabsClosable(True)
-        self.tabs.setMovable(True)
-        self.tabs.setElideMode(Qt.TextElideMode.ElideRight)
+        # Tab strip on top (browser style), then the navigation bar, then the folder views.
+        self.tabs = TabHost(self)
         self.tabs.tabCloseRequested.connect(self.close_tab)
         self.tabs.currentChanged.connect(lambda _i: self._sync_location())
         self.tabs.tabBar().installEventFilter(self)
-        plus = QToolButton()
-        plus.setText("+")
-        plus.setAutoRaise(True)
-        plus.setToolTip("New tab (Ctrl+T)")
-        plus.clicked.connect(lambda: self.new_tab())
-        self.tabs.setCornerWidget(plus, Qt.Corner.TopRightCorner)
-        self.setCentralWidget(self.tabs)
 
-        tb = QToolBar("Navigation")
-        tb.setObjectName("navigation")
-        tb.setMovable(False)
-        tb.addAction(self.act_back)
-        tb.addAction(self.act_forward)
-        tb.addAction(self.act_up)
-        tb.addAction(self.act_refresh)
-        self.address = AddressBar()
-        self.address.setPlaceholderText("Type a path, or %USERPROFILE%, or This PC")
+        self.tabstrip = QWidget()
+        self.tabstrip.setObjectName("tabstrip")
+        self.tabstrip.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.tabstrip.installEventFilter(self)
+        ts = QHBoxLayout(self.tabstrip)
+        ts.setContentsMargins(8, 6, 8, 0)
+        ts.setSpacing(2)
+        self.tabs.bar.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        ts.addWidget(self.tabs.bar, 0, Qt.AlignmentFlag.AlignBottom)
+        self.plus_btn = QToolButton()
+        self.plus_btn.setObjectName("plus")
+        self.plus_btn.setToolTip("New tab (Ctrl+T)")
+        self.plus_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.plus_btn.clicked.connect(lambda: self.new_tab())
+        ts.addWidget(self.plus_btn, 0, Qt.AlignmentFlag.AlignBottom)
+        ts.addStretch(1)
+
+        self.navbar = QWidget()
+        self.navbar.setObjectName("navbar")
+        self.navbar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        nb = QHBoxLayout(self.navbar)
+        nb.setContentsMargins(8, 6, 8, 6)
+        nb.setSpacing(2)
+        for a in (self.act_back, self.act_forward, self.act_up, self.act_refresh):
+            nb.addWidget(self._tool_button(a, self.navbar))
+        nb.addSpacing(6)
+        self.address_area = AddressArea()
+        self.address = self.address_area.edit
         self.address.returnPressed.connect(self._address_entered)
         self.address.escaped.connect(self._address_escaped)
+        self.address_area.crumbs.navigate.connect(self._crumb_navigate)
         completer = QCompleter(self)
         fsm = QFileSystemModel(completer)
         fsm.setFilter(QDir.Filter.AllDirs | QDir.Filter.NoDotAndDotDot | QDir.Filter.Drives)
@@ -234,17 +244,28 @@ class MainWindow(QMainWindow):
         completer.setModel(fsm)
         completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.address.setCompleter(completer)
-        tb.addWidget(self.address)
-        tb.addSeparator()
-        tb.addWidget(QLabel(" View: "))
+        nb.addWidget(self.address_area, 1)
+        nb.addSpacing(8)
+        view_label = QLabel("View")
+        view_label.setObjectName("viewlabel")
+        nb.addWidget(view_label)
         self.preset_combo = QComboBox()
         self.preset_combo.setPlaceholderText("Custom")
-        self.preset_combo.setMinimumContentsLength(14)
+        self.preset_combo.setMinimumContentsLength(12)
+        self.preset_combo.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.preset_combo.setToolTip("View preset. It applies to every folder and tab.")
         self.preset_combo.textActivated.connect(self.config.apply_preset)
-        tb.addWidget(self.preset_combo)
-        tb.addSeparator()
-        self.addToolBar(tb)
+        nb.addWidget(self.preset_combo)
+        nb.addSpacing(6)
+
+        central = QWidget()
+        cv = QVBoxLayout(central)
+        cv.setContentsMargins(0, 0, 0, 0)
+        cv.setSpacing(0)
+        cv.addWidget(self.tabstrip)
+        cv.addWidget(self.navbar)
+        cv.addWidget(self.tabs.stack, 1)
+        self.setCentralWidget(central)
 
         self.sidebar = Sidebar(self.config)
         self.sidebar.openRequested.connect(self._sidebar_open)
@@ -252,29 +273,41 @@ class MainWindow(QMainWindow):
         self.side_dock = QDockWidget("Places")
         self.side_dock.setObjectName("sidebar")
         self.side_dock.setWidget(self.sidebar)
+        self.side_dock.setTitleBarWidget(QWidget())
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.side_dock)
 
         self.inspector = Inspector()
         self.insp_dock = QDockWidget("Inspector")
         self.insp_dock.setObjectName("inspector")
         self.insp_dock.setWidget(self.inspector)
+        self.insp_dock.setTitleBarWidget(QWidget())
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.insp_dock)
         self.insp_dock.visibilityChanged.connect(lambda vis: vis and self.inspector_timer.start())
-        self.resizeDocks([self.side_dock, self.insp_dock], [220, 330], Qt.Orientation.Horizontal)
+        self._docks_sized = bool(self.config.get("window_state"))
 
         self.act_inspector = self.insp_dock.toggleViewAction()
         self.act_inspector.setText("Inspector")
         self.act_inspector.setShortcut(QKeySequence("Alt+P"))
-        self.act_inspector.setToolTip("Show or hide the inspector (Alt+P)")
-        self.act_inspector.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogInfoView))
+        self.act_inspector.setToolTip("Inspector (Alt+P)")
         self.addAction(self.act_inspector)
         self.act_sidebar = self.side_dock.toggleViewAction()
         self.act_sidebar.setText("Places sidebar")
-        tb.addAction(self.act_inspector)
-        tb.addAction(self.act_settings)
+        self.act_sidebar.setShortcut(QKeySequence("Alt+B"))
+        self.act_sidebar.setToolTip("Sidebar (Alt+B)")
+        self.addAction(self.act_sidebar)
+        self.act_menubar = self._action("Menu bar", self._toggle_menubar, checkable=True)
+        nb.addWidget(self._tool_button(self.act_sidebar, self.navbar))
+        nb.addWidget(self._tool_button(self.act_inspector, self.navbar))
+        self.menu_btn = QToolButton(self.navbar)
+        self.menu_btn.setAutoRaise(True)
+        self.menu_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.menu_btn.setToolTip("Menu")
+        self.menu_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        nb.addWidget(self.menu_btn)
 
         self.status_left = QLabel()
         self.status_right = QLabel()
+        self.statusBar().setSizeGripEnabled(False)
         self.statusBar().addWidget(self.status_left, 1)
         self.statusBar().addPermanentWidget(self.status_right)
 
@@ -310,6 +343,43 @@ class MainWindow(QMainWindow):
         t = mb.addMenu("&Tools")
         for a in (self.act_terminal, self.act_explorer, self.act_properties, None, self.act_settings):
             t.addSeparator() if a is None else t.addAction(a)
+        v.addAction(self.act_menubar)
+
+        # The same menus behind one button, so the menu bar can stay hidden.
+        self.main_menu = QMenu(self)
+        for menu in (f, e, v, g, self.bookmarks_menu, t):
+            self.main_menu.addMenu(menu)
+        self.main_menu.addSeparator()
+        self.main_menu.addAction(self.act_settings)
+        self.menu_btn.setMenu(self.main_menu)
+        show_mb = bool(self.config.get("show_menubar"))
+        self.act_menubar.setChecked(show_mb)
+        mb.setVisible(show_mb)
+
+    def _toggle_menubar(self, on):
+        self.menuBar().setVisible(on)
+        self.config.set("show_menubar", on)
+
+    def apply_theme(self):
+        c = theme.apply(QApplication.instance(), self.config.get("theme"))
+        self._theme_key = (self.config.get("theme"), c["name"])
+        self.tabstrip.setStyleSheet(theme.tabstrip_qss(c))
+        self.navbar.setStyleSheet(theme.navbar_qss(c))
+        self.statusBar().setStyleSheet(theme.statusbar_qss(c))
+        self.inspector.setStyleSheet(theme.inspector_qss(c))
+        self.sidebar.apply_theme(c)
+        for v in self.views():
+            v.apply_theme(c)
+        for act, name in ((self.act_back, "back"), (self.act_forward, "forward"), (self.act_up, "up"),
+                          (self.act_refresh, "refresh"), (self.act_inspector, "inspector"),
+                          (self.act_sidebar, "sidebar"), (self.act_settings, "settings")):
+            act.setIcon(theme.icon(name))
+        self.tabs.set_close_icon(theme.icon("close", 12))
+        self.menu_btn.setIcon(theme.icon("menu"))
+        self.plus_btn.setIcon(theme.icon("add"))
+        if theme.icon("add").isNull():          # no icon font: fall back to text
+            self.plus_btn.setText("+")
+            self.menu_btn.setText("☰")
 
     def _fill_columns_menu(self):
         from .config import COLUMN_TITLES, COLUMNS
@@ -390,6 +460,9 @@ class MainWindow(QMainWindow):
             self.tabs.setCurrentIndex((self.tabs.currentIndex() + delta) % n)
 
     def eventFilter(self, obj, ev):
+        if obj is self.tabstrip and ev.type() == QEvent.Type.MouseButtonDblClick:
+            self.new_tab()
+            return True
         if (obj is self.tabs.tabBar() and ev.type() == QEvent.Type.MouseButtonRelease
                 and ev.button() == Qt.MouseButton.MiddleButton):
             i = obj.tabAt(ev.position().toPoint())
@@ -416,7 +489,7 @@ class MainWindow(QMainWindow):
         v = self.view()
         if v is None or v.path is None:
             return
-        self.address.setText(display_path(v.path))
+        self.address_area.set_path(v.path, display_path(v.path))
         self.act_back.setEnabled(bool(v.back_stack))
         self.act_forward.setEnabled(bool(v.fwd_stack))
         self.act_up.setEnabled(v.path != DRIVES)
@@ -470,8 +543,17 @@ class MainWindow(QMainWindow):
 
     def _settings_changed(self):
         self.act_hidden.setChecked(self.config.get("show_hidden"))
-        for v in self.views():
-            v.apply_settings()
+        if (self.config.get("theme"), theme.resolve(self.config.get("theme"))) != self._theme_key:
+            self.apply_theme()
+        key = (self.config.get("show_hidden"), self.config.get("date_format"))
+        if key != getattr(self, "_listing_key", None):     # only re-list when it matters
+            self._listing_key = key
+            for v in self.views():
+                v.apply_settings()
+
+    def _system_scheme_changed(self, *_):
+        if self.config.get("theme") == "system":
+            self.apply_theme()
 
     # ----- navigation -------------------------------------------------------------------
     def go_back(self):
@@ -491,8 +573,14 @@ class MainWindow(QMainWindow):
             v.go_back()
 
     def focus_address(self):
-        self.address.setFocus()
-        self.address.selectAll()
+        self.address_area.start_edit()
+
+    def _crumb_navigate(self, path, in_new_tab):
+        if in_new_tab:
+            self.new_tab(path, activate=False)
+        else:
+            self.view().navigate(path)
+            self.view().tree.setFocus()
 
     def _address_entered(self):
         text = self.address.text().strip()
@@ -512,6 +600,7 @@ class MainWindow(QMainWindow):
 
     def _address_escaped(self):
         self.address.setText(display_path(self.view().path))
+        self.address_area.stop_edit()
         self.view().tree.setFocus()
 
     def _sidebar_open(self, path, in_new_tab):
@@ -811,6 +900,12 @@ class MainWindow(QMainWindow):
     def open_settings(self):
         dialogs.SettingsDialog(self.config, self).exec()
 
+    def showEvent(self, ev):
+        super().showEvent(ev)
+        if not self._docks_sized:              # first run: sensible panel widths (needs a shown window)
+            self._docks_sized = True
+            self.resizeDocks([self.side_dock, self.insp_dock], [230, 320], Qt.Orientation.Horizontal)
+
     # ----- shutdown --------------------------------------------------------------------------
     def closeEvent(self, ev):
         if self.jobs:
@@ -837,6 +932,7 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     config = Config()
+    theme.apply(app, config.get("theme"))
     fileops.cleanup_temp()
     paths = [normalize_path(a) for a in sys.argv[1:] if os.path.isdir(a)]
     win = MainWindow(config, paths)

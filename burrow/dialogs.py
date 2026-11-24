@@ -184,6 +184,11 @@ class SettingsDialog(QDialog):
             self.date_fmt.addItem(now.strftime(f), f)
         idx = self.date_fmt.findData(config.get("date_format"))
         self.date_fmt.setCurrentIndex(max(idx, 0))
+        self.theme = QComboBox()
+        for label, key in (("Match Windows", "system"), ("Light", "light"), ("Dark", "dark")):
+            self.theme.addItem(label, key)
+        self.theme.setCurrentIndex(max(self.theme.findData(config.get("theme")), 0))
+        gen.addRow("Theme:", self.theme)
         gen.addRow(self.show_hidden)
         gen.addRow(self.confirm)
         gen.addRow("New tabs open:", nt_row)
@@ -234,5 +239,6 @@ class SettingsDialog(QDialog):
             "confirm_delete": self.confirm.isChecked(),
             "new_tab_path": self.new_tab.text().strip(),
             "date_format": self.date_fmt.currentData(),
+            "theme": self.theme.currentData(),
         })
         self.accept()

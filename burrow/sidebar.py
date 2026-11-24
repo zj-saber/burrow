@@ -4,9 +4,10 @@ from __future__ import annotations
 import os
 
 from PySide6.QtCore import QStandardPaths, Qt, QTimer, Signal
-from PySide6.QtWidgets import QInputDialog, QMenu, QTreeWidget, QTreeWidgetItem
+from PySide6.QtGui import QColor, QFont
+from PySide6.QtWidgets import QFrame, QInputDialog, QMenu, QTreeWidget, QTreeWidgetItem
 
-from . import fileops
+from . import fileops, theme
 from .config import Config
 from .model import DRIVES, icon_cache, list_drives
 
@@ -35,7 +36,12 @@ class Sidebar(QTreeWidget):
         self.setHeaderHidden(True)
         self.setRootIsDecorated(False)
         self.setItemsExpandable(False)
-        self.setIndentation(12)
+        self.setIndentation(8)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setMouseTracking(True)
+        self.setMinimumWidth(170)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.setAcceptDrops(True)
         self.viewport().setAcceptDrops(True)
         self.setDragDropMode(QTreeWidget.DragDropMode.DropOnly)
@@ -52,9 +58,14 @@ class Sidebar(QTreeWidget):
         self.rebuild()
 
     def _section(self, title, path=None):
-        it = QTreeWidgetItem(self, [title])
+        it = QTreeWidgetItem(self, [title if path else title.upper()])
         f = it.font(0)
-        f.setBold(True)
+        if path:
+            f.setBold(True)
+        else:
+            f.setPointSizeF(max(7.0, f.pointSizeF() - 1.0))
+            f.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 108)
+            it.setForeground(0, QColor(theme.colors()["dim"]))
         it.setFont(0, f)
         it.setData(0, KIND_ROLE, "section")
         it.setData(0, PATH_ROLE, path)
@@ -99,6 +110,10 @@ class Sidebar(QTreeWidget):
             self._item(pc, d.name, d.path, "drive", icons.icon(d), f"{d.path}  —  {d.note}")
         self.expandAll()
         self.highlight(self._current)
+
+    def apply_theme(self, c: dict):
+        self.setStyleSheet(theme.sidebar_qss(c))
+        self.rebuild()
 
     def _check_drives(self):
         sig = [(d.path, d.name) for d in list_drives()]

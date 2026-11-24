@@ -221,7 +221,8 @@ class DirModel(QAbstractTableModel):
         self.folders_first = True
         self.icons = icon_cache()
         self._dates: dict = {}
-        self._dim = QColor(128, 128, 128)
+        self._dim = QColor(128, 128, 128, 170)
+        self.meta_color = QColor(128, 128, 128)   # set by the theme: size/type/date columns
 
     # ----- loading & sorting ------------------------------------------------
     def load(self, path: str, show_hidden: bool) -> str | None:
@@ -327,8 +328,11 @@ class DirModel(QAbstractTableModel):
             return Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         elif role == Qt.ItemDataRole.ToolTipRole and col == "name":
             return e.path
-        elif role == Qt.ItemDataRole.ForegroundRole and e.hidden:
-            return self._dim
+        elif role == Qt.ItemDataRole.ForegroundRole:
+            if e.hidden:
+                return self._dim
+            if col != "name":
+                return self.meta_color
         elif role == ENTRY_ROLE:
             return e
         return None

@@ -36,6 +36,8 @@ def _fmt_time(ts) -> str:
 class Inspector(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName("inspector")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setMinimumWidth(220)
         self._img_exts = _image_exts()
         self._pix: QPixmap | None = None
@@ -55,14 +57,17 @@ class Inspector(QWidget):
         self.form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.note = QLabel()
         self.note.setWordWrap(True)
-        self.note.setStyleSheet("color: gray;")
+        self.note.setProperty("role", "note")
         self.text = QPlainTextEdit(readOnly=True)
         self.text.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
         self.text.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self.text.hide()
 
+        self.form.setHorizontalSpacing(14)
+        self.form.setVerticalSpacing(6)
         self.lay = QVBoxLayout(self)
-        self.lay.setContentsMargins(10, 10, 10, 10)
+        self.lay.setContentsMargins(16, 16, 16, 12)
+        self.lay.setSpacing(8)
         self.lay.addWidget(self.preview)
         self.lay.addWidget(self.title)
         self.lay.addWidget(self.details)
@@ -85,10 +90,12 @@ class Inspector(QWidget):
     def _row(self, label: str, value: str):
         if not value:
             return
+        k = QLabel(label)
+        k.setProperty("role", "key")
         v = QLabel(value)
         v.setWordWrap(True)
         v.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.form.addRow(f"{label}:", v)
+        self.form.addRow(k, v)
 
     def _show_text(self, on: bool):
         self.text.setVisible(on)

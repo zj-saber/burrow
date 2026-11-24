@@ -5,12 +5,18 @@ import os
 import re
 
 from PySide6.QtCore import QFileSystemWatcher, QItemSelection, QItemSelectionModel, Qt, QTimer, Signal
-from PySide6.QtWidgets import (QAbstractItemView, QHeaderView, QLabel, QLineEdit, QMenu,
-                               QStyledItemDelegate, QTreeView, QVBoxLayout, QWidget)
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import (QAbstractItemView, QFrame, QHeaderView, QLabel, QLineEdit, QMenu,
+                               QStyle, QStyledItemDelegate, QTreeView, QVBoxLayout, QWidget)
 
-from . import dialogs, fileops
+from . import dialogs, fileops, theme
 from .config import COLUMN_TITLES, COLUMNS, DEFAULT_WIDTHS, Config
 from .model import DRIVES, ENTRY_ROLE, DirModel, Entry, FilterProxy
+
+
+_HOVER = QStyle.StateFlag.State_MouseOver
+_SELECTED = QStyle.StateFlag.State_Selected
+_FOCUS = QStyle.StateFlag.State_HasFocus
 
 
 def normalize_path(p: str) -> str:
@@ -32,7 +38,31 @@ def title_for(p: str) -> str:
     return os.path.basename(p) or p
 
 
-class NameDelegate(QStyledItemDelegate):
+class RowDelegate(QStyledItemDelegate):
+    """Taller rows, a subtle hover fill, and no dotted focus rectangle. Kept tiny on purpose:
+    it runs for every visible cell on every repaint."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.row_height = 26
+        self.hover = QColor(0, 0, 0, 0)
+
+    def sizeHint(self, option, index):
+        s = super().sizeHint(option, index)
+        if s.height() < self.row_height:
+            s.setHeight(self.row_height)
+        return s
+
+    def paint(self, painter, option, index):
+        state = option.state
+        if state & _HOVER and not state & _SELECTED:
+            painter.fillRect(option.rect, self.hover)
+        if state & _FOCUS:
+            option.state = state & ~_FOCUS
+        super().paint(painter, option, index)
+
+
+class NameDelegate(RowDelegate):
     """Inline rename that pre-selects the name without its extension, like Explorer."""
 
     def setEditorData(self, editor, index):
@@ -186,7 +216,13 @@ class FolderView(QWidget):
         t.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         t.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         t.setEditTriggers(QAbstractItemView.EditTrigger.EditKeyPressed | QAbstractItemView.EditTrigger.SelectedClicked)
-        t.setItemDelegateForColumn(0, NameDelegate(t))
+        self.row_delegate = RowDelegate(t)
+        self.name_delegate = NameDelegate(t)
+        t.setItemDelegate(self.row_delegate)
+        t.setItemDelegateForColumn(0, self.name_delegate)
+        t.setFrameShape(QFrame.Shape.NoFrame)
+        t.setMouseTracking(True)
+        t.viewport().setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         t.setDragEnabled(True)
         t.setAcceptDrops(True)
         t.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
@@ -232,6 +268,19 @@ class FolderView(QWidget):
 
         config.viewChanged.connect(self._on_view_changed)
         self.apply_layout()
+        self.apply_theme(theme.colors())
+
+    def apply_theme(self, c: dict):
+        """Style sheets go on the header and filter box only, never on the list itself."""
+        self.tree.header().setStyleSheet(theme.header_qss(c))
+        self.filter_edit.setStyleSheet(theme.field_qss(c))
+        self.model.meta_color = QColor(c["dim"])
+        hover = QColor(c["hover"])
+        row_h = max(24, self.fontMetrics().height() + 10)
+        for d in (self.row_delegate, self.name_delegate):
+            d.hover = hover
+            d.row_height = row_h
+        self.tree.viewport().update()
 
     # ----- navigation -------------------------------------------------------------
     def navigate(self, path: str, record: bool = True, select: str | None = None) -> bool:

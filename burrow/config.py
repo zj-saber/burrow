@@ -85,6 +85,8 @@ DEFAULTS = {
     "teracopy_close": False,
     "new_tab_path": "",
     "date_format": DATE_FORMATS[0],
+    "theme": "system",
+    "show_menubar": False,
     "bookmarks": [],
     "presets": {},
     "active_preset": "Details + Dates",
