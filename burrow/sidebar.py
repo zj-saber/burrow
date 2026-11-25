@@ -14,6 +14,7 @@ from .model import DRIVES, NETWORK, icon_cache, list_drives
 PATH_ROLE = Qt.ItemDataRole.UserRole
 KIND_ROLE = Qt.ItemDataRole.UserRole + 1
 INDEX_ROLE = Qt.ItemDataRole.UserRole + 2
+SECTION_ROLE = Qt.ItemDataRole.UserRole + 3   # stable id of a section, for remembering collapse
 
 PLACES = [
     ("Home", QStandardPaths.StandardLocation.HomeLocation),
@@ -36,9 +37,11 @@ class Sidebar(QTreeWidget):
         super().__init__(parent)
         self.config = config
         self.setHeaderHidden(True)
-        self.setRootIsDecorated(False)
-        self.setItemsExpandable(False)
-        self.setIndentation(8)
+        self.setRootIsDecorated(True)          # arrows on section headings
+        self.setItemsExpandable(True)
+        self.setExpandsOnDoubleClick(False)    # single click toggles plain headings instead
+        self.setAnimated(False)
+        self.setIndentation(14)
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setMouseTracking(True)
         self.setMinimumWidth(170)
@@ -50,6 +53,9 @@ class Sidebar(QTreeWidget):
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._menu)
         self.itemClicked.connect(self._clicked)
+        self.itemExpanded.connect(self._remember_collapsed)
+        self.itemCollapsed.connect(self._remember_collapsed)
+        self._building = False
         config.bookmarksChanged.connect(self.rebuild)
         self._drive_sig = None
         self._current = None
@@ -59,7 +65,7 @@ class Sidebar(QTreeWidget):
         self._timer.start()
         self.rebuild()
 
-    def _section(self, title, path=None, icon=None):
+    def _section(self, title, path=None, icon=None, key=None):
         it = QTreeWidgetItem(self, [title if path else title.upper()])
         f = it.font(0)
         if path:
@@ -70,6 +76,7 @@ class Sidebar(QTreeWidget):
             it.setForeground(0, QColor(theme.colors()["dim"]))
         it.setFont(0, f)
         it.setData(0, KIND_ROLE, "section")
+        it.setData(0, SECTION_ROLE, key)
         it.setData(0, PATH_ROLE, path)
         flags = Qt.ItemFlag.ItemIsEnabled
         if path:
@@ -93,7 +100,8 @@ class Sidebar(QTreeWidget):
     def rebuild(self):
         icons = icon_cache()
         self.clear()
-        bm = self._section("Bookmarks")
+        self._building = True
+        bm = self._section("Bookmarks", key="bookmarks")
         bm.setData(0, KIND_ROLE, "bookmarks")
         for i, b in enumerate(self.config.bookmarks()):
             it = self._item(bm, b["name"], b["path"], "bookmark", icons.folder_icon(b["path"]))
@@ -106,7 +114,7 @@ class Sidebar(QTreeWidget):
         if not self.config.bookmarks():
             hint = QTreeWidgetItem(bm, ["Ctrl+D bookmarks a folder"])
             hint.setFlags(Qt.ItemFlag.NoItemFlags)
-        sect = self._section("Places")
+        sect = self._section("Places", key="places")
         for label, loc in PLACES:
             p = QStandardPaths.writableLocation(loc)
             if p and os.path.isdir(p):
@@ -118,13 +126,13 @@ class Sidebar(QTreeWidget):
         local = [d for d in entries if d.kind not in ("cloud", "network")]
         network = [d for d in entries if d.kind == "network"]
         if cloud:
-            sect = self._section("Cloud")
+            sect = self._section("Cloud", key="cloud")
             for d in cloud:
                 self._item(sect, d.name, d.path, "cloud", icons.icon(d), f"{d.name}  —  {d.path}")
-        pc = self._section("This PC", DRIVES)
+        pc = self._section("This PC", DRIVES, key="pc")
         for d in local:
             self._item(pc, d.name, d.path, "drive", icons.icon(d), f"{d.path}  —  {d.note}")
-        net = self._section("Network", NETWORK, icons.network)
+        net = self._section("Network", NETWORK, icons.network, key="network")
         net.setData(0, KIND_ROLE, "network-root")
         for d in network:
             it = self._item(net, d.name, d.path, "netdrive", icons.network, f"{d.path}  —  {d.note}")
@@ -132,7 +140,11 @@ class Sidebar(QTreeWidget):
                 it.setForeground(0, QColor(theme.colors()["dim"]))
         for s in places.RECENT_SERVERS:
             self._item(net, s[2:], s, "server", icons.network, s)
-        self.expandAll()
+        collapsed = set(self.config.get("sidebar_collapsed"))
+        for i in range(self.topLevelItemCount()):
+            top = self.topLevelItem(i)
+            top.setExpanded(top.data(0, SECTION_ROLE) not in collapsed)
+        self._building = False
         self.highlight(self._current)
 
     def apply_theme(self, c: dict):
@@ -158,11 +170,24 @@ class Sidebar(QTreeWidget):
                         break
                 if target:
                     break
+        if target is not None and target.parent() is not None and not target.parent().isExpanded():
+            target = None          # selecting it would make Qt re-open the collapsed section
         self.blockSignals(True)
         self.setCurrentItem(target) if target else self.clearSelection()
         self.blockSignals(False)
 
+    def _remember_collapsed(self, _item=None):
+        if self._building:
+            return
+        collapsed = [self.topLevelItem(i).data(0, SECTION_ROLE) for i in range(self.topLevelItemCount())
+                     if not self.topLevelItem(i).isExpanded() and self.topLevelItem(i).data(0, SECTION_ROLE)]
+        if collapsed != self.config.get("sidebar_collapsed"):
+            self.config.set("sidebar_collapsed", collapsed)
+
     def _clicked(self, item, _col):
+        if item.parent() is None and not item.data(0, PATH_ROLE):
+            item.setExpanded(not item.isExpanded())   # plain headings (Bookmarks, Places, Cloud) toggle
+            return
         p = item.data(0, PATH_ROLE)
         if p:
             self.openRequested.emit(p, False)

@@ -91,6 +91,7 @@ DEFAULTS = {
     "show_menubar": False,
     "bookmarks": [],
     "recent_servers": [],
+    "sidebar_collapsed": [],
     "presets": {},
     "active_preset": "Details + Dates",
     "view": normalize_layout(BUILTIN_PRESETS["Details + Dates"]),
