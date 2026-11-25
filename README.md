@@ -6,7 +6,8 @@ A tabbed file manager for Windows, written in Python with Qt (PySide6).
 
 - **Browsing**: address bar with path completion (`%USERPROFILE%` and `This PC` work), back/forward/up (also on mouse buttons), natural sort ("file2" comes before "file10"), folders first, and show/hide hidden files.
 - **Mixed or folders-first sorting**: the *Sort* switch at the bottom right puts folders on top, or sorts files, folders and archives together purely by the column you sorted on (FilePilot-style). It applies to every folder.
-- **Columns view** (optional, like macOS Finder or One Commander): *View: list / columns* at the bottom right, View ▸ Columns view, or Ctrl+Shift+L. Each folder you pick opens in a new column to the right. This PC, Network and tag pages stay a list.
+- **Columns view** (optional, like macOS Finder or One Commander): *View: list / columns* at the bottom right, View ▸ Columns view, or Ctrl+Shift+L. Each folder you pick opens in a new column to the right. This PC, Network and tag pages stay a list. Columns have no scroll bars, for a compact look (the wheel, Shift+wheel and arrow keys scroll).
+- **Icon size slider** at the bottom right: 16 to 64 px icons in the list and columns, for every tab and window, remembered.
 - **Type to filter**: start typing in any folder to filter it by name. Backspace removes a character, Esc clears the filter.
 - **File operations**: cut, copy and paste (the clipboard works with Explorer), rename in place with F2 or a slow click, delete to the Recycle Bin, permanent delete, new folder or text file, Copy to / Move to, and drag and drop.
 - **TeraCopy integration**: paste, drag and drop, Copy to and Move to all hand the transfer to TeraCopy when it's installed. It is found automatically, or you can set its path in Settings. **Paste with built-in copier** skips TeraCopy for one paste. Duplicating an item in its own folder always uses the built-in copier.

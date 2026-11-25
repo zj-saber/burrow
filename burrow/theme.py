@@ -261,6 +261,11 @@ QStatusBar QToolButton#statusToggle {{ color: {c['dim']}; background: transparen
     border-radius: 9px; padding: 1px 10px; margin: 2px 6px; }}
 QStatusBar QToolButton#statusToggle:hover {{ color: {c['text']}; border-color: {c['accent']}; }}
 QStatusBar QToolButton#statusToggle:checked {{ color: {c['accent']}; }}
+QStatusBar QSlider#iconSlider {{ margin: 0 2px; }}
+QSlider#iconSlider::groove:horizontal {{ height: 3px; background: {c['border']}; border-radius: 1px; }}
+QSlider#iconSlider::sub-page:horizontal {{ background: {c['accent']}; border-radius: 1px; }}
+QSlider#iconSlider::handle:horizontal {{ width: 11px; height: 11px; margin: -4px 0; border-radius: 5px;
+    background: {c['text']}; }}
 """
 
 

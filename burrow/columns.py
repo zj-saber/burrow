@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import QDir, QModelIndex, QSize, Qt, Signal
-from PySide6.QtWidgets import QAbstractItemView, QColumnView, QFileSystemModel, QFrame, QStyledItemDelegate
+from PySide6.QtCore import QDir, QModelIndex, QPointF, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QPainter, QPalette, QPen
+from PySide6.QtWidgets import (QAbstractItemView, QColumnView, QFileSystemModel, QFrame, QListView,
+                               QStyledItemDelegate, QStyleOptionViewItem)
 
 
 class _RowDelegate(QStyledItemDelegate):
@@ -17,6 +19,25 @@ class _RowDelegate(QStyledItemDelegate):
     def sizeHint(self, option, index):
         s = super().sizeHint(option, index)
         return QSize(s.width(), max(s.height(), self.height))
+
+    def paint(self, painter, option, index):
+        """Row, then a tiny faint chevron on folders (instead of Qt's large arrow)."""
+        opt = option
+        is_dir = index.model().isDir(index)
+        if is_dir:
+            opt = QStyleOptionViewItem(option)
+            opt.rect = option.rect.adjusted(0, 0, -12, 0)      # keep the name clear of it
+        super().paint(painter, opt, index)
+        if is_dir:
+            r = option.rect
+            c = QColor(option.palette.color(QPalette.ColorRole.Text))
+            c.setAlpha(90)
+            painter.save()
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(QPen(c, 1.2))
+            x, y = r.right() - 8, r.center().y() + 0.5
+            painter.drawPolyline([QPointF(x - 2, y - 3), QPointF(x + 1, y), QPointF(x - 2, y + 3)])
+            painter.restore()
 
 
 class ColumnsView(QColumnView):
@@ -32,9 +53,13 @@ class ColumnsView(QColumnView):
         self.fs.setRootPath("")                   # "This PC": drives in the first column
         self.set_show_hidden(show_hidden)
         self.setModel(self.fs)
-        self.setItemDelegate(_RowDelegate(row_height, self))
+        self._delegate = _RowDelegate(row_height, self)
+        self.setItemDelegate(self._delegate)
         self.setFrameShape(QFrame.Shape.NoFrame)
-        self.setResizeGripsVisible(True)
+        # compact: no scroll bars or resize grips (the wheel, Shift+wheel and keys still scroll)
+        self.setResizeGripsVisible(False)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setColumnWidths([230] * 64)
         self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.setDragEnabled(True)
@@ -51,7 +76,19 @@ class ColumnsView(QColumnView):
         col.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         col.customContextMenuRequested.connect(lambda pos: self.contextMenu.emit(pos))
         col.setTextElideMode(Qt.TextElideMode.ElideMiddle)
+        col.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        col.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        col.setFrameShape(QFrame.Shape.NoFrame)
+        col.setViewportMargins(0, 0, 1, 0)       # 1px of window color between columns
+        col.setIconSize(self.iconSize())
         return col
+
+    def set_icon_size(self, px: int, row_height: int):
+        self._delegate.height = row_height
+        self.setIconSize(QSize(px, px))
+        for col in self.findChildren(QListView):
+            col.setIconSize(QSize(px, px))
+            col.doItemsLayout()
 
     def set_show_hidden(self, on: bool):
         f = QDir.Filter.AllEntries | QDir.Filter.NoDotAndDotDot | QDir.Filter.AllDirs | QDir.Filter.Drives

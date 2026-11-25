@@ -107,6 +107,7 @@ DEFAULTS = {
     "inspector_details": True,
     "inspector_split": 0.6,
     "sidebar_order": [],
+    "icon_size": 16,                # list / columns icon size (slider at the bottom)
     "view_mode": "list",            # new tabs open as "list" or "columns"            # section keys, top to bottom (dragged by their headings)         # preview height share in the inspector      # file details shown under the preview
     "win_e_opens": "window",        # Win+E: "window" or "tab"
     "split": "",                    # "", "h" (side by side) or "v" (stacked)

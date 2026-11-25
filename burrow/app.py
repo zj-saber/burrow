@@ -519,6 +519,24 @@ class MainWindow(QMainWindow):
         self.view_mode_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.view_mode_btn.toggled.connect(lambda on: self.set_view_mode("columns" if on else "list"))
         self.statusBar().addPermanentWidget(self.view_mode_btn)
+        # icon size slider (16-64 px), live for every tab in every window
+        from PySide6.QtWidgets import QSlider
+        self.icon_small = QLabel("□")
+        self.icon_small.setStyleSheet("font-size: 8pt; padding: 0 2px 0 8px;")
+        self.icon_slider = QSlider(Qt.Orientation.Horizontal)
+        self.icon_slider.setObjectName("iconSlider")
+        self.icon_slider.setRange(16, 64)
+        self.icon_slider.setSingleStep(4)
+        self.icon_slider.setPageStep(8)
+        self.icon_slider.setFixedWidth(110)
+        self.icon_slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.icon_slider.setValue(int(self.config.get("icon_size") or 16))
+        self.icon_slider.setToolTip("Icon size")
+        self.icon_slider.valueChanged.connect(self.set_icon_size)
+        self.icon_big = QLabel("□")
+        self.icon_big.setStyleSheet("font-size: 13pt; padding: 0 8px 0 2px;")
+        for wdg in (self.icon_small, self.icon_slider, self.icon_big):
+            self.statusBar().addPermanentWidget(wdg)
         self.statusBar().addPermanentWidget(self.status_right)
 
     def _make_menus(self):
@@ -1017,6 +1035,16 @@ class MainWindow(QMainWindow):
         self.view_mode_btn.setToolTip("Switch this tab between the list and columns (Ctrl+Shift+L)")
         self.sort_mode_btn.setToolTip("Files, folders and archives sorted together by the column — click for folders first"
                                       if mixed else "Folders on top, then files — click to sort everything by the column only")
+
+    def set_icon_size(self, px: int):
+        self.config.set("icon_size", int(px))
+        for win in WINDOWS:
+            for view in win.views():
+                view.set_icon_size(px)
+            if win is not self and win.icon_slider.value() != px:
+                win.icon_slider.blockSignals(True)
+                win.icon_slider.setValue(px)
+                win.icon_slider.blockSignals(False)
 
     def set_view_mode(self, mode: str):
         """List or columns for this tab; new tabs open the same way."""

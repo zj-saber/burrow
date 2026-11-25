@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 import re
 
-from PySide6.QtCore import QFileSystemWatcher, QItemSelection, QItemSelectionModel, QPointF, Qt, QTimer, Signal
+from PySide6.QtCore import QFileSystemWatcher, QItemSelection, QItemSelectionModel, QPointF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPalette
 from PySide6.QtWidgets import (QAbstractItemView, QFrame, QHeaderView, QLabel, QLineEdit, QMenu,
                                QStyle, QStyledItemDelegate, QTreeView, QVBoxLayout, QWidget)
@@ -341,11 +341,22 @@ class FolderView(QWidget):
         self.filter_edit.setStyleSheet(theme.field_qss(c))
         self.model.meta_color = QColor(c["dim"])
         hover = QColor(c["hover"])
-        row_h = max(24, self.fontMetrics().height() + 10)
         for d in (self.row_delegate, self.name_delegate):
             d.hover = hover
-            d.row_height = row_h
-        self.tree.viewport().update()
+        self.set_icon_size(self.config.get("icon_size") or 16)
+
+    def row_height(self) -> int:
+        return max(24, self.fontMetrics().height() + 10, self.icon_px + 8)
+
+    def set_icon_size(self, px: int):
+        """Icon size for the list and the columns (the slider in the status bar)."""
+        self.icon_px = px = max(16, min(64, int(px)))
+        self.tree.setIconSize(QSize(px, px))
+        for d in (self.row_delegate, self.name_delegate):
+            d.row_height = self.row_height()
+        self.tree.doItemsLayout()               # uniform row heights: re-measure the first row
+        if self.columns is not None:
+            self.columns.set_icon_size(px, self.row_height())
 
     # ----- navigation -------------------------------------------------------------
     def navigate(self, path: str, record: bool = True, select: str | None = None) -> bool:
@@ -393,8 +404,8 @@ class FolderView(QWidget):
         want = self.mode == "columns" and self.path is not None and not places.is_special(self.path)
         if want and self.columns is None:
             from .columns import ColumnsView
-            row_h = max(24, self.fontMetrics().height() + 10)
-            c = self.columns = ColumnsView(bool(self.config.get("show_hidden")), row_h, self)
+            c = self.columns = ColumnsView(bool(self.config.get("show_hidden")), self.row_height(), self)
+            c.set_icon_size(self.icon_px, self.row_height())
             c.folderChosen.connect(self._column_folder)
             c.fileChosen.connect(self._column_file)
             c.openRequested.connect(lambda paths: self.open_entries(DirModel.fetch_paths(paths)))
