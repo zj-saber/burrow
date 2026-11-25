@@ -8,3 +8,12 @@ Remove-Item -Recurse "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\
 # This script lives inside the folder being removed, so delete it from a separate process.
 Start-Process -WindowStyle Hidden cmd.exe -ArgumentList "/c timeout /t 2 >nul & rmdir /s /q `"$dest`""
 Write-Host "Burrow was uninstalled. Settings in $env:APPDATA\Burrow were kept."
+# Undo "Use Burrow as the default file manager" so folders open in Explorer again.
+foreach ($cls in "Directory", "Drive") {
+    $base = "HKCU:\Software\Classes\$cls\shell"
+    if ((Get-ItemProperty $base -Name "(default)" -ErrorAction SilentlyContinue)."(default)" -eq "openinburrow") {
+        Remove-ItemProperty $base -Name "(default)"
+    }
+    Remove-Item -Recurse "$base\openinburrow"
+}
+Remove-Item -Recurse "HKCU:\Software\Classes\CLSID\{52205fd8-5dfb-447d-801a-d0b52f2e83e1}"

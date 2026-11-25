@@ -161,11 +161,36 @@ class IconCache:
         if ic is None:
             ic = self.folder
             if not places.is_remote(path):
-                custom = self.provider.icon(QFileInfo(path))
+                custom = self._ico_from_desktop_ini(path) or self.provider.icon(QFileInfo(path))
                 if not custom.isNull():
                     ic = custom
             self._icons[key] = ic
         return ic
+
+    @staticmethod
+    def _ico_from_desktop_ini(path: str):
+        """If desktop.ini points at a plain .ico (Burrow's folder colors, FolderPainter), load it
+        directly: exact, and it updates the moment a color changes (the shell route is cached
+        for the whole process)."""
+        ini = os.path.join(path, "desktop.ini")
+        if not os.path.isfile(ini):
+            return None
+        from . import foldercolor
+        try:
+            text, _ = foldercolor._read(ini)
+        except OSError:
+            return None
+        res = foldercolor._get(text, foldercolor.SECTION, "IconResource") \
+            or foldercolor._get(text, foldercolor.SECTION, "IconFile") or ""
+        file = os.path.expandvars(res.split(",")[0].strip().strip('"'))
+        if file.lower().endswith(".ico"):
+            if not os.path.isabs(file):
+                file = os.path.join(path, file)
+            if os.path.isfile(file):
+                from PySide6.QtGui import QIcon
+                ic = QIcon(file)
+                return ic if not ic.isNull() else None
+        return None
 
     def forget_folder_icons(self):
         """Drop cached folder icons (after a manual refresh, so recolored folders update)."""
@@ -285,6 +310,22 @@ class DirModel(QAbstractTableModel):
             return scan_dir(path, show_hidden), None
         except OSError as ex:
             return [], (ex.strerror or str(ex))
+
+    @staticmethod
+    def fetch_paths(paths: list[str]) -> list[Entry]:
+        """Entries for an explicit list of paths (tag views). Missing paths are skipped."""
+        out = []
+        for p in paths:
+            try:
+                st = os.stat(p)
+            except OSError:
+                continue
+            attrs = getattr(st, "st_file_attributes", 0)
+            is_dir = os.path.isdir(p)
+            birth = getattr(st, "st_birthtime", None) or st.st_ctime
+            out.append(Entry(os.path.basename(p.rstrip("\\")) or p, p, is_dir, None if is_dir else st.st_size,
+                             st.st_mtime, birth, st.st_atime, attrs))
+        return out
 
     def load(self, path: str, show_hidden: bool) -> str | None:
         entries, error = self.fetch(path, show_hidden)
@@ -447,7 +488,10 @@ class DirModel(QAbstractTableModel):
         except OSError as ex:
             self.renameFailed.emit(f'Couldn\'t rename "{e.name}": {ex.strerror or ex}')
             return False
+        old_path = e.path
         e.renamed(new, new_path)
+        from . import tags
+        tags.store().renamed(old_path, new_path)
         self.dataChanged.emit(self.index(index.row(), 0), self.index(index.row(), len(COLUMNS) - 1))
         return True
 

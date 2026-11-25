@@ -6,10 +6,12 @@ from datetime import datetime
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFontDatabase, QImageReader, QPixmap
-from PySide6.QtWidgets import (QFormLayout, QLabel, QPlainTextEdit, QSizePolicy, QVBoxLayout,
+from PySide6.QtWidgets import (QFormLayout, QHeaderView, QLabel, QPlainTextEdit, QSizePolicy,
+                               QTreeWidget, QTreeWidgetItem, QVBoxLayout,
                                QWidget)
 
-from . import everything, places
+from . import archive, everything, places
+from .zoomview import ZoomView
 from .media import AUDIO_EXTS, VIDEO_EXTS, MediaPreview
 from .model import CLOUD_ONLY, DRIVES, NETWORK, Entry, attr_string, human_size, icon_cache
 
@@ -76,10 +78,22 @@ class Inspector(QWidget):
         self.media.coverShown.connect(lambda: (self.preview.clear(), self.preview.setFixedHeight(0)))
         self.lay.addWidget(self.preview)
         self.lay.addWidget(self.media)
+        self.zoom = ZoomView(self)
+        self.zoom.popOutRequested.connect(self._pop_out)
+        self.lay.addWidget(self.zoom, 0)
         self.lay.addWidget(self.title)
         self.lay.addWidget(self.details)
         self.lay.addWidget(self.note)
         self.lay.addWidget(self.text, 0)
+        self.archive_tree = QTreeWidget()
+        self.archive_tree.setHeaderLabels(["Name", "Size"])
+        self.archive_tree.setUniformRowHeights(True)
+        self.archive_tree.setIndentation(14)
+        self.archive_tree.header().setStretchLastSection(False)
+        self.archive_tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.archive_tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.archive_tree.hide()
+        self.lay.addWidget(self.archive_tree, 0)
         self.lay.addStretch(1)
         self._stretch_index = self.lay.count() - 1
 
@@ -90,6 +104,11 @@ class Inspector(QWidget):
     def _reset(self):
         self._shown = None
         self.media.unload()
+        self._archive_req = getattr(self, "_archive_req", 0) + 1
+        self.archive_tree.clear()
+        self.zoom.clear()
+        self._show_zoom(False)
+        self._show_archive(False)
         while self.form.rowCount():
             self.form.removeRow(0)
         self._pix = None
@@ -105,10 +124,17 @@ class Inspector(QWidget):
             return
         k = QLabel(label)
         k.setProperty("role", "key")
-        v = QLabel(value)
+        # long paths have no spaces to wrap at: allow breaks after each backslash
+        v = QLabel(value.replace("\\", "\\​") if "\\" in value else value)
         v.setWordWrap(True)
         v.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.form.addRow(k, v)
+
+    def _show_archive(self, on: bool):
+        self.archive_tree.setVisible(on)
+        self.lay.setStretchFactor(self.archive_tree, 1 if on else 0)
+        if on:
+            self.lay.setStretch(self._stretch_index, 0)
 
     def _show_text(self, on: bool):
         self.text.setVisible(on)
@@ -166,6 +192,14 @@ class Inspector(QWidget):
             self._set_icon(icons.computer)
             self.title.setText("This PC")
             self._set_note("Your drives and cloud folders. Select one to see details.")
+            return
+        if places.is_tag(folder):
+            from . import tags
+            tid = folder[len(places.TAG_PREFIX):]
+            self._set_icon(icons.folder)
+            self.title.setText(f"Tag: {tags.TAG_NAMES.get(tid, tid)}")
+            self._set_note("Everything you've tagged with this color, wherever it is. Right-click any "
+                           "file or folder ▸ Tags to add or remove tags.")
             return
         if folder == NETWORK or places.is_server(folder):
             self._set_icon(icons.network)
@@ -260,12 +294,74 @@ class Inspector(QWidget):
         if remote and (e.size or 0) > 512 * 1024:
             self._set_note("Large file on a network location: no automatic preview.")
             return
-        if e.ext in self._img_exts:
+        if e.ext == "pdf":
+            self._preview_pdf(e)
+        elif e.ext in self._img_exts:
             self._preview_image(e)
+        elif e.ext in archive.ARCHIVE_EXTS or e.path.lower().endswith(archive.TAR_SUFFIXES):
+            self._preview_archive(e)
         elif e.ext in VIDEO_EXTS or e.ext in AUDIO_EXTS:
             self._preview_media(e)
         elif e.ext in TEXT_EXTS or (e.ext not in BINARY_EXTS and (e.size or 0) <= 4 * 1024 * 1024):
             self._preview_text(e)
+
+    def _preview_archive(self, e: Entry):
+        """List what's inside without extracting anything. Read on a worker thread."""
+        self._shown = e.path
+        self._archive_req = getattr(self, "_archive_req", 0) + 1
+        req = self._archive_req
+        self._set_note("Reading archive…")
+        path = e.path
+        places.run_async(lambda: archive.list_archive(path), lambda res: self._archive_ready(path, res, req))
+
+    def _archive_ready(self, path: str, res: dict, req: int = 0):
+        if self._shown != path or req != getattr(self, "_archive_req", 0):
+            return                                  # the selection moved on
+        self._set_note("")
+        if res["error"] and not res["entries"]:
+            self._row("Archive", res["kind"])
+            self._set_note(res["error"])
+            return
+        self._row("Archive", res["kind"] + ("  (encrypted)" if res["encrypted"] else ""))
+        self._row("Contents", f"{res['files']:,} files, {res['dirs']:,} folders")
+        self._row("Unpacked", human_size(res["size"]))
+        if res["packed"] and res["size"]:
+            self._row("Compression", f"{100 - res['packed'] * 100 / res['size']:.0f}% smaller")
+        icons = icon_cache()
+        folder_icon, file_icon = icons.folder, icons.file
+        nodes: dict[str, QTreeWidgetItem] = {}
+
+        def node(parts) -> QTreeWidgetItem | None:
+            if not parts:
+                return None
+            key = "/".join(parts)
+            it = nodes.get(key)
+            if it is None:
+                parent = node(parts[:-1])
+                it = QTreeWidgetItem([parts[-1], ""])
+                it.setIcon(0, folder_icon)
+                it.setData(0, 256, (0, parts[-1].lower()))
+                (parent.addChild(it) if parent else self.archive_tree.addTopLevelItem(it))
+                nodes[key] = it
+            return it
+        self.archive_tree.setUpdatesEnabled(False)
+        for name, size, is_dir, _mt in res["entries"]:
+            parts = [x for x in name.split("/") if x]
+            if is_dir:
+                node(parts)
+                continue
+            parent = node(parts[:-1])
+            it = QTreeWidgetItem([parts[-1], human_size(size)])
+            it.setIcon(0, file_icon)
+            it.setTextAlignment(1, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            (parent.addChild(it) if parent else self.archive_tree.addTopLevelItem(it))
+        self.archive_tree.sortItems(0, Qt.SortOrder.AscendingOrder)
+        if self.archive_tree.topLevelItemCount() == 1:
+            self.archive_tree.topLevelItem(0).setExpanded(True)   # single root folder: open it
+        self.archive_tree.setUpdatesEnabled(True)
+        if res["truncated"]:
+            self._set_note(f"Showing the first {len(res['entries']):,} items.")
+        self._show_archive(True)
 
     def _preview_media(self, e: Entry):
         """Video or audio player in place of the image preview. Nothing plays until asked."""
@@ -292,19 +388,48 @@ class Inspector(QWidget):
         return False
 
     def _preview_image(self, e: Entry):
-        reader = QImageReader(e.path)
-        reader.setAutoTransform(True)
-        size = reader.size()
-        if size.isValid():
+        info = self.zoom.load_image(e.path)
+        size = info.get("size")
+        if size is not None and size.isValid():
             self._row("Dimensions", f"{size.width()} × {size.height()} px")
-            if size.width() > 1600 or size.height() > 1600:
-                reader.setScaledSize(size.scaled(1600, 1600, Qt.AspectRatioMode.KeepAspectRatio))
-        img = reader.read()
-        if img.isNull():
-            self._set_note(f"Can't preview this image: {reader.errorString()}")
+        if info.get("error"):
+            self._set_note(f"Can't preview this image: {info['error']}")
             return
-        self._pix = QPixmap.fromImage(img)
-        self._fit_pixmap()
+        self.preview.clear()
+        self.preview.setFixedHeight(0)
+        self._show_zoom(True)
+
+    def _preview_pdf(self, e: Entry):
+        try:
+            info = self.zoom.load_pdf(e.path)
+        except ImportError:
+            self._set_note("PDF preview isn't available in this build.")
+            return
+        if info.get("error"):
+            self._set_note(info["error"])
+            return
+        self._row("Pages", f"{info['pages']:,}")
+        self._row("Title", info.get("title", ""))
+        self._row("Author", info.get("author", ""))
+        self.preview.clear()
+        self.preview.setFixedHeight(0)
+        self._show_zoom(True)
+
+    def _show_zoom(self, on: bool):
+        if on:   # size the box to the picture/page shape, at most 60% of the panel
+            w = max(160, self.width() - 32)
+            h = int(w * self.zoom.aspect()) + 34
+            self.zoom.setMaximumHeight(max(140, min(h, int(self.height() * 0.6))))
+        self.zoom.setVisible(on)
+        self.lay.setStretchFactor(self.zoom, 3 if on else 0)
+        if on:
+            self.lay.setStretch(self._stretch_index, 0)
+
+    def _pop_out(self):
+        if self.zoom.kind:
+            import os
+            from .zoomview import ViewerWindow
+            ViewerWindow(self.zoom, os.path.basename(self.zoom.path), self.window()).show()
 
     def _preview_text(self, e: Entry):
         try:

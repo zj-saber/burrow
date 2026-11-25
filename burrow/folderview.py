@@ -4,12 +4,12 @@ from __future__ import annotations
 import os
 import re
 
-from PySide6.QtCore import QFileSystemWatcher, QItemSelection, QItemSelectionModel, Qt, QTimer, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtCore import QFileSystemWatcher, QItemSelection, QItemSelectionModel, QPointF, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QPainter, QPalette
 from PySide6.QtWidgets import (QAbstractItemView, QFrame, QHeaderView, QLabel, QLineEdit, QMenu,
                                QStyle, QStyledItemDelegate, QTreeView, QVBoxLayout, QWidget)
 
-from . import dialogs, everything, fileops, places, theme
+from . import dialogs, everything, fileops, places, tags, theme
 from .config import COLUMN_TITLES, COLUMNS, DEFAULT_WIDTHS, Config
 from .model import DRIVES, ENTRY_ROLE, NETWORK, DirModel, Entry, FilterProxy
 
@@ -20,7 +20,7 @@ _FOCUS = QStyle.StateFlag.State_HasFocus
 
 
 def normalize_path(p: str) -> str:
-    if p in (DRIVES, NETWORK):
+    if places.is_special(p):
         return p
     p = os.path.expandvars(os.path.expanduser(p.strip().strip('"'))).replace("/", "\\")
     if re.fullmatch(r"[A-Za-z]:", p):
@@ -32,11 +32,13 @@ def normalize_path(p: str) -> str:
 
 
 def display_path(p: str) -> str:
+    if places.is_tag(p):
+        return f"Tag: {tags.TAG_NAMES.get(p[len(places.TAG_PREFIX):], '?')}"
     return {DRIVES: "This PC", NETWORK: "Network"}.get(p, p)
 
 
 def title_for(p: str) -> str:
-    if p in (DRIVES, NETWORK):
+    if places.is_special(p):
         return display_path(p)
     if places.is_server(p):
         return p[2:]
@@ -46,7 +48,7 @@ def title_for(p: str) -> str:
 def _exists(p: str) -> bool:
     """Existence check that never waits on the network: remote paths are checked by the
     background load instead."""
-    return p in (DRIVES, NETWORK) or places.is_remote(p) or os.path.isdir(p)
+    return places.is_special(p) or places.is_remote(p) or os.path.isdir(p)
 
 
 class RowDelegate(QStyledItemDelegate):
@@ -91,6 +93,40 @@ class NameDelegate(RowDelegate):
                 except RuntimeError:
                     pass
             QTimer.singleShot(0, select)
+
+    def paint(self, painter, option, index):
+        """Name cell, plus colored tag dots at its right end. With no tags anywhere this is a
+        single empty-dict check; with tags, one dict lookup per visible name."""
+        store = tags.store()
+        if not store.items:
+            return super().paint(painter, option, index)
+        e = index.data(ENTRY_ROLE)
+        ids = store.get(e.path) if e is not None else []
+        if not ids:
+            return super().paint(painter, option, index)
+        r = option.rect
+        dots_w = 10 * len(ids) + 8
+        # fill the dots area like the rest of the row (selection / hover)
+        state = option.state
+        if state & _SELECTED:
+            group = QPalette.ColorGroup.Active if state & QStyle.StateFlag.State_Active else QPalette.ColorGroup.Inactive
+            painter.fillRect(r.adjusted(r.width() - dots_w, 0, 0, 0), option.palette.color(group, QPalette.ColorRole.Highlight))
+        elif state & _HOVER:
+            painter.fillRect(r.adjusted(r.width() - dots_w, 0, 0, 0), self.hover)
+        option.rect = r.adjusted(0, 0, -dots_w, 0)
+        super().paint(painter, option, index)
+        option.rect = r
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        ring = option.palette.color(QPalette.ColorRole.Base)
+        cy = r.center().y() + 1
+        x = r.right() - dots_w + 8
+        for tid in ids:
+            painter.setPen(ring)
+            painter.setBrush(QColor(tags.TAG_COLORS[tid]))
+            painter.drawEllipse(QPointF(x + 4, cy), 4.5, 4.5)
+            x += 10
+        painter.restore()
 
 
 class FilterEdit(QLineEdit):
@@ -358,7 +394,7 @@ class FolderView(QWidget):
 
     def parent_path(self) -> str | None:
         p = self.path
-        if p in (DRIVES, NETWORK) or p is None:
+        if p is None or places.is_special(p):
             return None
         if places.is_server(p):
             return NETWORK
@@ -405,6 +441,12 @@ class FolderView(QWidget):
         slow or offline server never freezes the window."""
         self._load_token += 1
         token, path, hidden = self._load_token, self.path, self.config.get("show_hidden")
+        if places.is_tag(path):
+            wanted = tags.store().paths_with(path[len(places.TAG_PREFIX):])
+            self.loading = True
+            places.run_async(lambda: (DirModel.fetch_paths(wanted), None),
+                             lambda res: self._loaded(token, res, select, current, scroll))
+            return
         remote = places.is_remote(path) or places.is_server(path)
         if not remote:
             self._loaded(token, DirModel.fetch(path, hidden), select, current, scroll)

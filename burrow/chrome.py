@@ -116,6 +116,9 @@ class TabHost(QObject):
 
 
 def path_segments(path: str) -> list[tuple[str, str]]:
+    if path.startswith("::tag:"):
+        from .folderview import display_path
+        return [(display_path(path), path)]
     if path == NETWORK:
         return [("Network", NETWORK)]
     if path.startswith("\\\\"):

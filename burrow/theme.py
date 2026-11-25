@@ -135,7 +135,7 @@ def apply(app, mode: str, palette: str = "burrow") -> dict:
 GLYPHS = {
     "back": "", "forward": "", "up": "", "refresh": "",
     "settings": "", "inspector": "", "menu": "", "add": "",
-    "sidebar": "", "close": "", "chevron": "",
+    "sidebar": "", "close": "", "chevron": "", "chevron_down": "",
     "play": "", "pause": "", "volume": "", "mute": "",
 }
 _icon_font_family: str | None = None
@@ -224,12 +224,11 @@ def navbar_qss(c):
 
 
 def sidebar_qss(c):
+    # Only the widget itself is styled. Item hover/selection are painted by the sidebar's
+    # delegate: Qt's style-sheet item highlight also fills the indentation strip as a
+    # separate block beside the row.
     return f"""
 QTreeWidget {{ background: {c['panel']}; border: none; outline: 0; padding: 6px 6px; }}
-QTreeWidget::item {{ height: 26px; padding-left: 4px; border-radius: 6px; }}
-QTreeWidget::item:hover {{ background: {c['chip']}; }}
-QTreeWidget::item:selected {{ background: {c['select']}; color: {c['seltext']}; }}
-QTreeWidget::item:disabled {{ color: {c['dim']}; }}
 """
 
 

@@ -25,9 +25,10 @@ New-Item -ItemType Directory -Force assets | Out-Null
     --exclude-module PySide6.QtMultimediaQuick `
     --hidden-import PySide6.QtMultimedia `
     --hidden-import PySide6.QtMultimediaWidgets `
+    --hidden-import PySide6.QtPdf `
+    --hidden-import PySide6.QtNetwork `
     --exclude-module PySide6.Qt3DCore `
     --exclude-module PySide6.QtCharts `
-    --exclude-module PySide6.QtPdf `
     Burrow.pyw
 
 Write-Host "Built: $PSScriptRoot\dist\Burrow\Burrow.exe"

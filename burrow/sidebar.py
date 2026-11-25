@@ -4,10 +4,12 @@ from __future__ import annotations
 import os
 
 from PySide6.QtCore import QStandardPaths, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont
-from PySide6.QtWidgets import QFrame, QInputDialog, QMenu, QTreeWidget, QTreeWidgetItem
+from PySide6.QtCore import QRectF
+from PySide6.QtGui import QColor, QFont, QPainter, QPalette
+from PySide6.QtWidgets import (QApplication, QFrame, QInputDialog, QMenu, QStyle, QStyledItemDelegate,
+                               QStyleOptionViewItem, QTreeWidget, QTreeWidgetItem)
 
-from . import fileops, places, theme
+from . import fileops, places, tags, theme
 from .config import Config
 from .model import DRIVES, NETWORK, icon_cache, list_drives
 
@@ -27,6 +29,42 @@ PLACES = [
 ]
 
 
+class _SidebarDelegate(QStyledItemDelegate):
+    """Rounded hover/selection fill drawn inside the item's own rect, so nothing bleeds into
+    the indentation strip. Cheap: the sidebar has a few dozen rows."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.select = QColor(0, 0, 0, 0)
+        self.hover = QColor(0, 0, 0, 0)
+        self.seltext = QColor(0, 0, 0)
+
+    def sizeHint(self, option, index):
+        s = super().sizeHint(option, index)
+        s.setHeight(max(s.height(), 26))
+        return s
+
+    def paint(self, painter, option, index):
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        selected = bool(opt.state & QStyle.StateFlag.State_Selected)
+        hovered = bool(opt.state & QStyle.StateFlag.State_MouseOver) and bool(index.flags() & Qt.ItemFlag.ItemIsSelectable)
+        if selected or hovered:
+            painter.save()
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(self.select if selected else self.hover)
+            painter.drawRoundedRect(QRectF(opt.rect).adjusted(0, 1, -2, -1), 6, 6)
+            painter.restore()
+        if selected:
+            opt.palette.setColor(QPalette.ColorRole.Text, self.seltext)
+            opt.palette.setColor(QPalette.ColorRole.HighlightedText, self.seltext)
+        opt.state &= ~(QStyle.StateFlag.State_Selected | QStyle.StateFlag.State_MouseOver | QStyle.StateFlag.State_HasFocus)
+        opt.rect = opt.rect.adjusted(4, 0, 0, 0)
+        w = opt.widget
+        (w.style() if w else QApplication.style()).drawControl(QStyle.ControlElement.CE_ItemViewItem, opt, painter, w)
+
+
 class Sidebar(QTreeWidget):
     openRequested = Signal(str, bool)          # path, in new tab?
     dropRequested = Signal(list, str, bool)    # sources, target, move?
@@ -37,7 +75,12 @@ class Sidebar(QTreeWidget):
         super().__init__(parent)
         self.config = config
         self.setHeaderHidden(True)
-        self.setRootIsDecorated(True)          # arrows on section headings
+        # No branch column: Qt's style sheet engine paints it as a separate rounded block next
+        # to the highlight. Headings carry their own chevron icon instead.
+        self.setRootIsDecorated(False)
+        self._delegate = _SidebarDelegate(self)
+        self.setItemDelegate(self._delegate)
+        self.viewport().setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self.setItemsExpandable(True)
         self.setExpandsOnDoubleClick(False)    # single click toggles plain headings instead
         self.setAnimated(False)
@@ -53,10 +96,11 @@ class Sidebar(QTreeWidget):
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._menu)
         self.itemClicked.connect(self._clicked)
-        self.itemExpanded.connect(self._remember_collapsed)
-        self.itemCollapsed.connect(self._remember_collapsed)
+        self.itemExpanded.connect(self._section_toggled)
+        self.itemCollapsed.connect(self._section_toggled)
         self._building = False
         config.bookmarksChanged.connect(self.rebuild)
+        tags.store().changed.connect(self.rebuild)
         self._drive_sig = None
         self._current = None
         self._timer = QTimer(self)
@@ -81,7 +125,6 @@ class Sidebar(QTreeWidget):
         flags = Qt.ItemFlag.ItemIsEnabled
         if path:
             flags |= Qt.ItemFlag.ItemIsSelectable
-            it.setIcon(0, icon or icon_cache().computer)
         it.setFlags(flags)
         return it
 
@@ -129,6 +172,14 @@ class Sidebar(QTreeWidget):
             sect = self._section("Cloud", key="cloud")
             for d in cloud:
                 self._item(sect, d.name, d.path, "cloud", icons.icon(d), f"{d.name}  —  {d.path}")
+        used = [t for t in tags.TAGS if tags.store().count(t[0])]
+        sect = self._section("Tags", key="tags")
+        for tid, name, color in used:
+            self._item(sect, f"{name}  ·  {tags.store().count(tid)}", tags.tag_location(tid), "tag",
+                       tags.color_icon(color), f"Everything tagged {name}")
+        if not used:
+            hint = QTreeWidgetItem(sect, ["Right-click ▸ Tags to tag items"])
+            hint.setFlags(Qt.ItemFlag.NoItemFlags)
         pc = self._section("This PC", DRIVES, key="pc")
         for d in local:
             self._item(pc, d.name, d.path, "drive", icons.icon(d), f"{d.path}  —  {d.note}")
@@ -144,11 +195,20 @@ class Sidebar(QTreeWidget):
         for i in range(self.topLevelItemCount()):
             top = self.topLevelItem(i)
             top.setExpanded(top.data(0, SECTION_ROLE) not in collapsed)
+            if top.data(0, SECTION_ROLE):
+                top.setIcon(0, theme.icon("chevron_down" if top.isExpanded() else "chevron", 12))
         self._building = False
         self.highlight(self._current)
 
     def apply_theme(self, c: dict):
         self.setStyleSheet(theme.sidebar_qss(c))
+        self._delegate.select = QColor(c["select"])
+        self._delegate.hover = QColor(c["chip"])
+        self._delegate.seltext = QColor(c["seltext"])
+        pal = self.palette()                       # the delegate paints selection; Qt must not
+        for g in (QPalette.ColorGroup.Active, QPalette.ColorGroup.Inactive):
+            pal.setColor(g, QPalette.ColorRole.Highlight, QColor(0, 0, 0, 0))
+        self.setPalette(pal)
         self.rebuild()
 
     def _check_drives(self):
@@ -176,6 +236,11 @@ class Sidebar(QTreeWidget):
         self.setCurrentItem(target) if target else self.clearSelection()
         self.blockSignals(False)
 
+    def _section_toggled(self, item):
+        if item.parent() is None and item.data(0, SECTION_ROLE):
+            item.setIcon(0, theme.icon("chevron_down" if item.isExpanded() else "chevron", 12))
+        self._remember_collapsed()
+
     def _remember_collapsed(self, _item=None):
         if self._building:
             return
@@ -192,7 +257,19 @@ class Sidebar(QTreeWidget):
         if p:
             self.openRequested.emit(p, False)
 
+    def drawBranches(self, painter, rect, index):
+        """Paint nothing in the indentation strip. Headings draw their own chevrons, and Qt
+        would otherwise fill this strip as a separate block beside the rounded highlight."""
+        return
+
     def mousePressEvent(self, ev):
+        if ev.button() == Qt.MouseButton.LeftButton:
+            it = self.itemAt(ev.position().toPoint())
+            # the chevron at the start of a heading toggles it, even on link headings
+            if (it is not None and it.parent() is None and it.data(0, SECTION_ROLE)
+                    and ev.position().x() < self.visualItemRect(it).left() + 22):
+                it.setExpanded(not it.isExpanded())
+                return
         if ev.button() == Qt.MouseButton.MiddleButton:
             it = self.itemAt(ev.position().toPoint())
             if it and it.data(0, PATH_ROLE):

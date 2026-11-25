@@ -63,8 +63,15 @@ def run_async(fn, callback):
 
 
 # ----- path classification ------------------------------------------------------------
+TAG_PREFIX = "::tag:"   # tag views: ::tag:red
+
+
+def is_tag(path: str) -> bool:
+    return bool(path) and path.startswith(TAG_PREFIX)
+
+
 def is_special(path: str) -> bool:
-    return path in (DRIVES, NETWORK)
+    return path in (DRIVES, NETWORK) or is_tag(path)
 
 
 def is_server(path: str) -> bool:

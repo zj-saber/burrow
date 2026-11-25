@@ -212,6 +212,17 @@ class SettingsDialog(QDialog):
         gen.addRow("Colors:", self.palette)
         gen.addRow(self.show_hidden)
         gen.addRow(self.confirm)
+        from . import integration
+        self.default_fm = QCheckBox("Use Burrow as the default file manager")
+        self.default_fm.setChecked(integration.is_default())
+        self._default_was = self.default_fm.isChecked()
+        fm_note = QLabel("Folders and drives you open anywhere in Windows (desktop, Explorer, Run, shortcuts) "
+                         "and Win+E open in Burrow, as tabs in the open window. The Open/Save dialogs inside "
+                         "other apps and browsers can't be replaced; Windows draws those inside each app.")
+        fm_note.setWordWrap(True)
+        fm_note.setProperty("role", "key")
+        gen.addRow(self.default_fm)
+        gen.addRow(fm_note)
         gen.addRow("New tabs open:", nt_row)
         gen.addRow("Date format:", self.date_fmt)
 
@@ -253,6 +264,11 @@ class SettingsDialog(QDialog):
             self.new_tab.setText(os.path.normpath(p))
 
     def _save(self):
+        if self.default_fm.isChecked() != self._default_was:
+            from . import integration
+            err = integration.set_default(self.default_fm.isChecked())
+            if err:
+                QMessageBox.warning(self, "Default file manager", f"Couldn't change the setting: {err}")
         self.config.update({
             "use_teracopy": self.use_tc.isChecked(),
             "teracopy_path": self.tc_path.text().strip(),

@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QCompleter, QDockWidget,
                                QVBoxLayout, QWidget)
 from PySide6.QtCore import QItemSelection, QItemSelectionModel
 
-from . import dialogs, fileops, theme
+from . import dialogs, fileops, foldercolor, integration, tags, theme
 from .chrome import AddressArea, TabHost
 from .config import APP_NAME, Config
 from .folderview import FolderView, display_path, normalize_path, title_for
@@ -120,6 +120,7 @@ class MainWindow(QMainWindow):
         config.viewChanged.connect(lambda _src: self._sync_preset_combo())
         config.presetsChanged.connect(self._sync_preset_combo)
         config.bookmarksChanged.connect(self._sync_location)
+        tags.store().changed.connect(self._tags_changed)
 
         if config.get("window_geometry"):
             self.restoreGeometry(QByteArray.fromHex(config.get("window_geometry").encode()))
@@ -385,6 +386,50 @@ class MainWindow(QMainWindow):
 
     def _space_pressed(self) -> bool:
         return self.insp_dock.isVisible() and self.inspector.toggle_media()
+
+    def _add_tag_menu(self, m: QMenu, paths: list[str]):
+        sub = m.addMenu("Tags")
+        store = tags.store()
+        for tid, name, color in tags.TAGS:
+            a = sub.addAction(tags.color_icon(color), name)
+            a.setCheckable(True)
+            a.setChecked(all(tid in store.get(p) for p in paths))
+            a.triggered.connect(lambda on, tid=tid: store.set_tag(paths, tid, on))
+        sub.addSeparator()
+        clear = sub.addAction("Remove all tags")
+        clear.setEnabled(any(store.get(p) for p in paths))
+        clear.triggered.connect(lambda: store.clear(paths))
+
+    def _add_color_menu(self, m: QMenu, folders: list[str]):
+        sub = m.addMenu("Folder color")
+        current = foldercolor.current_color(folders[0]) if len(folders) == 1 else None
+        for name, color in foldercolor.COLORS:
+            a = sub.addAction(tags.color_icon(color), name)
+            a.setCheckable(True)
+            a.setChecked(name == current)
+            a.triggered.connect(lambda _=False, n=name: self.set_folder_color(folders, n))
+        sub.addSeparator()
+        sub.addAction("Default").triggered.connect(lambda: self.set_folder_color(folders, None))
+
+    def set_folder_color(self, folders: list[str], name):
+        errors = [err for f in folders if (err := foldercolor.set_color(f, name))]
+        icon_cache().forget_folder_icons()
+        for v in self.views():
+            v.tree.viewport().update()
+        self.sidebar.rebuild()
+        self.inspector_timer.start()
+        if errors:
+            QMessageBox.warning(self, APP_NAME, "Couldn't change the color of:\n" + "\n".join(errors[:10]))
+        else:
+            what = name or "the default"
+            self.statusBar().showMessage(f"Set {len(folders)} folder(s) to {what}. Explorer shows it too.", 5000)
+
+    def _tags_changed(self):
+        for v in self.views():
+            if places.is_tag(v.path):
+                v.refresh()
+            else:
+                v.tree.viewport().update()
 
     def _toggle_menubar(self, on):
         self.menuBar().setVisible(on)
@@ -679,6 +724,13 @@ class MainWindow(QMainWindow):
                           self.act_copy_to, self.act_move_to, None,
                           self.act_rename, self.act_delete, self.act_delete_perm):
                     m.addSeparator() if a is None else m.addAction(a)
+            plain = [e for e in entries if not e.is_drive]
+            if plain:
+                m.addSeparator()
+                self._add_tag_menu(m, [e.path for e in plain])
+                folders = [e.path for e in plain if e.is_dir and not places.is_remote(e.path)]
+                if folders:
+                    self._add_color_menu(m, folders)
             if len(entries) == 1 and entries[0].is_dir:
                 p = entries[0].path
                 m.addSeparator()
@@ -787,6 +839,8 @@ class MainWindow(QMainWindow):
             if exe:
                 try:
                     fileops.teracopy_transfer(exe, srcs, target, move, self.config.get("teracopy_close"))
+                    for s in srcs:                    # TeraCopy reports nothing back: copy tags along
+                        tags.store().copied(s, os.path.join(target, os.path.basename(s)))
                 except OSError as ex:
                     QMessageBox.warning(self, APP_NAME, f"Couldn't start TeraCopy: {ex}")
                     return False
@@ -853,6 +907,12 @@ class MainWindow(QMainWindow):
         return plan
 
     def _job_finished(self, runner):
+        for src, dst, _mode in runner.job.plan:      # tags follow items Burrow moved or copied
+            if os.path.lexists(dst):
+                if runner.move and not os.path.lexists(src):
+                    tags.store().renamed(src, dst)
+                elif not runner.move:
+                    tags.store().copied(src, dst)
         if runner in self.jobs:
             self.jobs.remove(runner)
         runner.deleteLater()
@@ -876,6 +936,7 @@ class MainWindow(QMainWindow):
         v = self.view()
         row = v.tree.currentIndex().row()
         ok, aborted = fileops.delete_paths([e.path for e in es], int(self.winId()), permanent)
+        tags.store().deleted([e.path for e in es if not os.path.lexists(e.path)])
         v.refresh()
         n = v.proxy.rowCount()
         if n and row >= 0:
@@ -952,6 +1013,24 @@ class MainWindow(QMainWindow):
         self.view().refresh()
         self.view().tree.viewport().update()
 
+    def open_external(self, args: list):
+        """Paths from another launch (a folder opened in Windows, Win+E, a second Burrow)."""
+        if not args:
+            self.new_tab()
+        for a in args:
+            if places.is_unc(a) or os.path.isdir(a):
+                self.new_tab(a)
+            elif os.path.isfile(a):
+                v = self.new_tab(os.path.dirname(a))
+                v.select_paths([a], a)
+            else:
+                self.new_tab(DRIVES)
+        if self.isMinimized():
+            self.showNormal()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
     def map_drive(self):
         places.map_drive_dialog(int(self.winId()))
         self.sidebar.rebuild()
@@ -1010,10 +1089,19 @@ def main():
     if os.path.isfile(icon_path):
         from PySide6.QtGui import QIcon
         app.setWindowIcon(QIcon(icon_path))
+    args = [a for a in sys.argv[1:] if a and not a.startswith("-")]
+    # Already running? Hand over the paths (opened as tabs there) and quit.
+    if integration.send_to_running([os.path.abspath(a) for a in args]):
+        return 0
     config = Config()
     theme.apply(app, config.get("theme"), config.get("palette"))
     fileops.cleanup_temp()
-    paths = [normalize_path(a) for a in sys.argv[1:] if os.path.isdir(a)]
+    paths = [normalize_path(a) for a in args if os.path.isdir(a)]
     win = MainWindow(config, paths)
+    server = integration.InstanceServer(win)
+    server.received.connect(win.open_external)
+    for a in args:                        # a file on the command line: open its folder, select it
+        if os.path.isfile(a):
+            win.open_external([os.path.abspath(a)])
     win.show()
     return app.exec()
