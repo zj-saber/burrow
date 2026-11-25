@@ -1,6 +1,6 @@
 """Draw Burrow's app icon and write a multi-size .ico (PNG-compressed entries).
 
-The mark: a folder on a deep-blue tile, with a rounded "burrow" opening tunnelled into its
+The mark (option B, "Warm"): a cream folder on an espresso tile, with a rounded "burrow" opening tunnelled into its
 front, lit from the top. Large sizes get depth (gradients, a soft shadow, a highlight);
 16-24 px are drawn simpler and bolder so they stay crisp in the taskbar and title bar.
 
@@ -23,75 +23,56 @@ def _rounded(x, y, w, h, r):
 
 
 def draw(p: QPainter, size: int):
+    """B · Warm: espresso tile, cream folder, dark arched doorway (matches the Primary theme)."""
     small = size <= 24
     s = size / 256.0
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
     p.setPen(Qt.PenStyle.NoPen)
 
-    # --- tile: deep indigo to bright blue, with a soft top glow
-    inset = 4 if small else 10
+    # tile: warm brown to espresso, with a soft top-left glow on larger sizes
+    inset = 6 if small else 10
     tile = _rounded(inset * s, inset * s, (256 - 2 * inset) * s, (256 - 2 * inset) * s, 58 * s)
     g = QLinearGradient(QPointF(0, 0), QPointF(size, size))
-    g.setColorAt(0.0, QColor("#5b9dff"))
-    g.setColorAt(0.55, QColor("#3a6cf0"))
-    g.setColorAt(1.0, QColor("#2a3fb8"))
+    g.setColorAt(0.0, QColor("#7a5a40"))
+    g.setColorAt(0.55, QColor("#4f3b2b"))
+    g.setColorAt(1.0, QColor("#2e261f"))
     p.fillPath(tile, g)
     if not small:
-        glow = QRadialGradient(QPointF(90 * s, 40 * s), 190 * s)
-        glow.setColorAt(0.0, QColor(255, 255, 255, 70))
-        glow.setColorAt(1.0, QColor(255, 255, 255, 0))
+        glow = QRadialGradient(QPointF(80 * s, 36 * s), 200 * s)
+        glow.setColorAt(0.0, QColor(255, 240, 220, 60))
+        glow.setColorAt(1.0, QColor(255, 240, 220, 0))
         p.fillPath(tile, glow)
 
-    # --- folder geometry (in 256-space)
-    fx, fw = 50, 156
-    back_y, front_y, bottom = 70, 104, 196
-    if small:
-        fx, fw, back_y, front_y, bottom = 36, 184, 58, 96, 204
+    # folder geometry (256-space); bolder and larger at small sizes
+    fx, fw, back_y, front_y, bottom = (34, 188, 56, 96, 206) if small else (50, 156, 70, 104, 196)
+    back = _rounded(fx * s, (back_y + 12) * s, fw * s, (bottom - back_y - 12) * s, 16 * s).united(
+        _rounded(fx * s, back_y * s, 66 * s, 34 * s, 12 * s))
+    p.fillPath(back, QColor("#cfb696"))
 
-    # back panel with tab
-    back = QPainterPath()
-    back.addRoundedRect(QRectF(fx * s, (back_y + 12) * s, fw * s, (bottom - back_y - 12) * s), 16 * s, 16 * s)
-    back.addRoundedRect(QRectF(fx * s, back_y * s, 66 * s, 34 * s), 12 * s, 12 * s)
-    back = back.simplified()
-    p.fillPath(back, QColor(255, 255, 255, 120 if not small else 150))
-
-    # soft shadow under the front panel
-    if not small:
-        for i, a in enumerate((26, 18, 10)):
+    if not small:   # soft shadow under the front panel
+        for i, a in enumerate((34, 22, 12)):
             sh = _rounded((fx - 1) * s, (front_y + 6 + i * 3) * s, (fw + 2) * s, (bottom - front_y) * s, 18 * s)
-            p.fillPath(sh, QColor(10, 20, 80, a))
+            p.fillPath(sh, QColor(30, 18, 8, a))
 
-    # front panel
     front = _rounded(fx * s, front_y * s, fw * s, (bottom - front_y) * s, 18 * s)
     fg = QLinearGradient(QPointF(0, front_y * s), QPointF(0, bottom * s))
-    fg.setColorAt(0.0, QColor("#ffffff"))
-    fg.setColorAt(1.0, QColor("#dfe8ff"))
+    fg.setColorAt(0.0, QColor("#fbf8f4"))
+    fg.setColorAt(1.0, QColor("#e4d7c3"))
     p.fillPath(front, fg)
 
-    # the burrow: an arched opening sitting on the bottom edge of the front panel
-    cx = 128
-    hw = 30 if not small else 40          # half width
-    top = 138 if not small else 128
+    # the burrow: an arched doorway sitting on the bottom edge of the front panel
+    cx, hw = 128, (42 if small else 30)
+    top = 124 if small else 138
     arch = QPainterPath()
     arch.moveTo((cx - hw) * s, bottom * s)
     arch.lineTo((cx - hw) * s, (top + hw) * s)
     arch.arcTo(QRectF((cx - hw) * s, top * s, 2 * hw * s, 2 * hw * s), 180, -180)
     arch.lineTo((cx + hw) * s, bottom * s)
     arch.closeSubpath()
-    arch = arch.intersected(front)
     ag = QLinearGradient(QPointF(0, top * s), QPointF(0, bottom * s))
-    ag.setColorAt(0.0, QColor("#16245e"))
-    ag.setColorAt(1.0, QColor("#2a3fb8"))
-    p.fillPath(arch, ag)
-    if not small:
-        # a sliver of light on the arch rim
-        rim = QPainterPath()
-        rim.arcMoveTo(QRectF((cx - hw - 6) * s, (top - 6) * s, (2 * hw + 12) * s, (2 * hw + 12) * s), 160)
-        rim.arcTo(QRectF((cx - hw - 6) * s, (top - 6) * s, (2 * hw + 12) * s, (2 * hw + 12) * s), 160, -140)
-        pen = p.pen()
-        p.setPen(QColor(58, 108, 240, 90))
-        p.drawPath(rim)
-        p.setPen(pen)
+    ag.setColorAt(0.0, QColor("#2a2018"))
+    ag.setColorAt(1.0, QColor("#593e22"))
+    p.fillPath(arch.intersected(front), ag)
 
 
 def render(size: int) -> QImage:
