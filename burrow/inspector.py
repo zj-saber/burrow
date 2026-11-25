@@ -43,6 +43,7 @@ def _fmt_time(ts) -> str:
 
 class Inspector(QWidget):
     detailsToggled = Signal(bool)
+    splitChanged = Signal(float)     # preview height share, for Settings persistence
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -75,18 +76,39 @@ class Inspector(QWidget):
 
         self.form.setHorizontalSpacing(14)
         self.form.setVerticalSpacing(6)
-        self.lay = QVBoxLayout(self)
-        self.lay.setContentsMargins(16, 16, 16, 12)
+        # Two parts with a drag handle between them: the stage (photo / PDF / video, as tall as
+        # you like) and the body (name, details, text, archive, book).
+        from PySide6.QtWidgets import QSplitter
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(16, 16, 16, 12)
+        self.split = QSplitter(Qt.Orientation.Vertical)
+        self.split.setChildrenCollapsible(False)
+        self.split.setHandleWidth(9)
+        outer.addWidget(self.split)
+        self.stage = QWidget()
+        self.stage_lay = QVBoxLayout(self.stage)
+        self.stage_lay.setContentsMargins(0, 0, 0, 4)
+        self.stage_lay.setSpacing(4)
+        self.body = QWidget()
+        self.split.addWidget(self.stage)
+        self.split.addWidget(self.body)
+        self.split.setStretchFactor(0, 3)
+        self.split.setStretchFactor(1, 2)
+        self.split.splitterMoved.connect(self._split_moved)
+        self.split_ratio = 0.6
+        self.stage.hide()
+        self.lay = QVBoxLayout(self.body)
+        self.lay.setContentsMargins(0, 4, 0, 0)
         self.lay.setSpacing(8)
         self.media = MediaPreview(self)
         self.media.metadataReady.connect(self._media_info)
         self.media.failed.connect(self._set_note)
         self.media.coverShown.connect(lambda: (self.preview.clear(), self.preview.setFixedHeight(0)))
         self.lay.addWidget(self.preview)
-        self.lay.addWidget(self.media)
+        self.stage_lay.addWidget(self.media, 1)
         self.zoom = ZoomView(self)
         self.zoom.popOutRequested.connect(self._pop_out)
-        self.lay.addWidget(self.zoom, 0)
+        self.stage_lay.addWidget(self.zoom, 1)
         self.lay.addWidget(self.title)
         # "Details" header: folds the file information away to give the preview more room
         from PySide6.QtWidgets import QToolButton
@@ -126,14 +148,15 @@ class Inspector(QWidget):
     def set_details_visible(self, on: bool, user: bool = False):
         self.details.setVisible(on)
         self.details_btn.setText(("▾  Details" if on else "▸  Details"))
-        if self.zoom.isVisible():
-            self._show_zoom(True)
+        if not self.stage.isHidden():
+            self._apply_split()
         if user:
             self.detailsToggled.emit(on)
 
     def _reset(self):
         self._shown = None
         self.media.unload()
+        self.stage.hide()
         self._raw_req = getattr(self, "_raw_req", 0) + 1
         self._archive_req = getattr(self, "_archive_req", 0) + 1
         self.archive_tree.clear()
@@ -355,7 +378,7 @@ class Inspector(QWidget):
         elif e.ext in archive.ARCHIVE_EXTS or e.path.lower().endswith(archive.TAR_SUFFIXES):
             self._preview_archive(e)
         elif e.ext in VIDEO_EXTS or e.ext in AUDIO_EXTS:
-            self._preview_media(e)
+            self._preview_media_staged(e)
         elif pref("preview_text") and (e.ext in TEXT_EXTS or e.ext not in BINARY_EXTS):
             # any size: only the first 256 KB is read, and binary content is detected
             self._preview_text(e)
@@ -417,6 +440,10 @@ class Inspector(QWidget):
         if res["truncated"]:
             self._set_note(f"Showing the first {len(res['entries']):,} items.")
         self._show_archive(True)
+
+    def _preview_media_staged(self, e: Entry):
+        self._preview_media(e)
+        self.update_stage()
 
     def _preview_media(self, e: Entry):
         """Video or audio player in place of the image preview. Nothing plays until asked."""
@@ -575,15 +602,30 @@ class Inspector(QWidget):
         self._show_zoom(True)
 
     def _show_zoom(self, on: bool):
-        if on:   # size the box to the picture/page shape, at most 60% of the panel
-            w = max(160, self.width() - 32)
-            h = int(w * self.zoom.aspect()) + 34
-            cap = 0.6 if self.details.isVisible() else 0.88     # more room when details are folded
-            self.zoom.setMaximumHeight(max(140, min(h, int(self.height() * cap))))
         self.zoom.setVisible(on)
-        self.lay.setStretchFactor(self.zoom, 3 if on else 0)
-        if on:
-            self.lay.setStretch(self._stretch_index, 0)
+        self.update_stage()
+
+    def update_stage(self):
+        """Show the stage (with the user's height) when there's a photo/PDF/video to show."""
+        busy = not self.zoom.isHidden() or not self.media.isHidden()
+        was = not self.stage.isHidden()
+        self.stage.setVisible(busy)
+        if busy and not was:
+            self._apply_split()
+
+    def _apply_split(self):
+        total = max(200, self.split.height())
+        if self.details.isVisible():
+            top = int(total * self.split_ratio)
+        else:                                   # details folded: the preview gets almost everything
+            top = total - max(60, self.body.sizeHint().height() if self.body.sizeHint().height() < total // 3 else 90)
+        self.split.setSizes([top, max(60, total - top)])
+
+    def _split_moved(self, *_):
+        sizes = self.split.sizes()
+        if sum(sizes) and self.details.isVisible():
+            self.split_ratio = sizes[0] / sum(sizes)
+            self.splitChanged.emit(self.split_ratio)
 
     def _pop_out(self):
         if self.zoom.kind:

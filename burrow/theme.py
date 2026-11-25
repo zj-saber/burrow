@@ -257,6 +257,10 @@ def statusbar_qss(c):
 QStatusBar {{ background: {c['window']}; border-top: 1px solid {c['border']}; }}
 QStatusBar::item {{ border: none; }}
 QStatusBar QLabel {{ color: {c['dim']}; padding: 0 8px; }}
+QStatusBar QToolButton#statusToggle {{ color: {c['dim']}; background: transparent; border: 1px solid {c['border']};
+    border-radius: 9px; padding: 1px 10px; margin: 2px 6px; }}
+QStatusBar QToolButton#statusToggle:hover {{ color: {c['text']}; border-color: {c['accent']}; }}
+QStatusBar QToolButton#statusToggle:checked {{ color: {c['accent']}; }}
 """
 
 
@@ -264,6 +268,9 @@ def inspector_qss(c):
     return f"""
 #inspector {{ background: {c['panel']}; }}
 #inspector QLabel {{ background: transparent; }}
+#inspector QSplitter::handle:vertical {{ background: transparent; border-top: 1px solid {c['border']};
+                                         margin: 4px 40px; }}
+#inspector QSplitter::handle:vertical:hover {{ border-top: 2px solid {c['accent']}; }}
 #inspector QLabel[role="key"] {{ color: {c['dim']}; }}
 #inspector QLabel[role="note"] {{ color: {c['dim']}; }}
 #inspector QToolButton#detailsToggle {{ color: {c['dim']}; border: none; padding: 2px 0; text-align: left; }}

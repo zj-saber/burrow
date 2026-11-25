@@ -256,6 +256,9 @@ class FolderView(QWidget):
         self.space_handler = None          # set by the window: Space plays media previews
         self.seek_handler = None           # set by the window: Left/Right seek media previews
         self.loading = False
+        self.mode = config.get("view_mode") if config.get("view_mode") in ("list", "columns") else "list"
+        self.columns = None                # built the first time this tab shows columns
+        self._from_columns = False
 
         self.model = DirModel(self)
         self.model.date_format = config.get("date_format")
@@ -319,6 +322,7 @@ class FolderView(QWidget):
         lay.addWidget(self.error_label)
         lay.addWidget(self.tree, 1)
         lay.addWidget(self.filter_edit)
+        self._lay = lay
 
         self.watcher = QFileSystemWatcher(self)
         self._refresh_timer = QTimer(self)
@@ -368,8 +372,75 @@ class FolderView(QWidget):
         if self.watcher.directories():
             self.watcher.removePaths(self.watcher.directories())
         self._load([select] if select else [], select, clear=True)
+        self._sync_mode_widgets(select)
         self.pathChanged.emit(path)
         return True
+
+    # ----- columns view (optional, per tab) ------------------------------------------
+    def columns_active(self) -> bool:
+        return self.mode == "columns" and self.columns is not None and self.columns.isVisible()
+
+    def set_mode(self, mode: str):
+        if mode == self.mode:
+            return
+        self.mode = mode
+        self._sync_mode_widgets()
+        self.focus_list()
+        self.selectionChanged.emit()
+
+    def _sync_mode_widgets(self, select: str | None = None):
+        """Columns can't show virtual places (This PC, Network, tags): those stay a list."""
+        want = self.mode == "columns" and self.path is not None and not places.is_special(self.path)
+        if want and self.columns is None:
+            from .columns import ColumnsView
+            row_h = max(24, self.fontMetrics().height() + 10)
+            c = self.columns = ColumnsView(bool(self.config.get("show_hidden")), row_h, self)
+            c.folderChosen.connect(self._column_folder)
+            c.fileChosen.connect(self._column_file)
+            c.openRequested.connect(lambda paths: self.open_entries(DirModel.fetch_paths(paths)))
+            c.contextMenu.connect(lambda pos: self.contextMenuRequested.emit(pos))
+            c.selectionModel().selectionChanged.connect(lambda *_: self.selectionChanged.emit())
+            self._lay.insertWidget(2, c, 1)
+        if self.columns is not None:
+            self.columns.setVisible(want)
+        self.tree.setVisible(not want)
+        if want and not self._from_columns:
+            self.columns.show_path(self.path, select)
+
+    def _column_folder(self, path: str):
+        self._from_columns = True
+        try:
+            if path != self.path:
+                self.navigate(path)
+        finally:
+            self._from_columns = False
+        self.selectionChanged.emit()
+
+    def _column_file(self, path: str):
+        parent = os.path.dirname(path)
+        self._from_columns = True
+        try:
+            if parent and os.path.normcase(parent) != os.path.normcase(self.path or ""):
+                self.navigate(parent)
+        finally:
+            self._from_columns = False
+        self.selectionChanged.emit()
+
+    def focus_list(self):
+        (self.columns if self.columns_active() else self.tree).setFocus()
+
+    def select_all(self):
+        if self.columns_active():
+            self.columns.select_all_in_column()
+        else:
+            self.tree.selectAll()
+
+    def menu_pos(self, pos):
+        """Global position for a context menu requested at `pos`, and whether it's on an item."""
+        if self.columns_active():
+            from PySide6.QtGui import QCursor
+            return QCursor.pos(), bool(self.columns.selected_paths())
+        return self.tree.viewport().mapToGlobal(pos), self.tree.indexAt(pos).isValid()
 
     def _watch(self):
         """Watch the folder for changes. Called after a successful load: adding a watch on an
@@ -426,6 +497,8 @@ class FolderView(QWidget):
                 p = None if parent == p else parent
             self.navigate(p or DRIVES, record=False)
             return
+        if self.columns is not None:
+            self.columns.set_show_hidden(bool(self.config.get("show_hidden")))
         sel = [e.path for e in self.selected_entries()]
         cur = self.current_entry()
         scroll = self.tree.verticalScrollBar().value()
@@ -512,13 +585,20 @@ class FolderView(QWidget):
 
     # ----- selection --------------------------------------------------------------
     def selected_entries(self) -> list[Entry]:
+        if self.columns_active():
+            return DirModel.fetch_paths(self.columns.selected_paths())
         rows = sorted(self.tree.selectionModel().selectedRows(0), key=lambda i: i.row())
         return [e for e in (self.proxy.entry(i) for i in rows) if e is not None]
 
     def current_entry(self) -> Entry | None:
+        if self.columns_active():
+            es = self.selected_entries()
+            return es[-1] if es else None
         return self.proxy.entry(self.tree.currentIndex())
 
     def select_paths(self, paths: list[str], current: str | None = None):
+        if self.columns_active() and (current or paths):
+            self.columns.show_path(self.path, current or paths[0])
         sm = self.tree.selectionModel()
         want = {os.path.normcase(p) for p in paths if p}
         cur_key = os.path.normcase(current) if current else None
@@ -543,6 +623,20 @@ class FolderView(QWidget):
             sm.setCurrentIndex(self.proxy.index(0, 0), QItemSelectionModel.SelectionFlag.NoUpdate)
 
     def edit_current(self):
+        if self.columns_active():
+            es = self.selected_entries()
+            if len(es) == 1 and not es[0].is_drive:
+                from PySide6.QtWidgets import QInputDialog
+                name, ok = QInputDialog.getText(self, "Rename", "New name:", text=es[0].name)
+                if ok and name.strip() and name.strip() != es[0].name:
+                    new = os.path.join(os.path.dirname(es[0].path), name.strip())
+                    try:
+                        os.rename(es[0].path, new)
+                        tags.store().renamed(es[0].path, new)
+                        self.columns.show_path(self.path, new)
+                    except OSError as ex:
+                        self._rename_failed(f"Couldn't rename: {ex.strerror or ex}")
+            return
         idx = self.tree.currentIndex()
         if idx.isValid():
             self.tree.edit(idx.siblingAtColumn(0))

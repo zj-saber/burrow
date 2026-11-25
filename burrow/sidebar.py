@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import QStandardPaths, Qt, QTimer, Signal
+from PySide6.QtCore import QMimeData, QStandardPaths, Qt, QTimer, Signal
 from PySide6.QtCore import QRectF
-from PySide6.QtGui import QColor, QFont, QPainter, QPalette
+from PySide6.QtGui import QColor, QDrag, QFont, QPainter, QPalette, QPen
 from PySide6.QtWidgets import (QApplication, QFrame, QInputDialog, QMenu, QStyle, QStyledItemDelegate,
                                QStyleOptionViewItem, QTreeWidget, QTreeWidgetItem)
 
@@ -17,6 +17,8 @@ PATH_ROLE = Qt.ItemDataRole.UserRole
 KIND_ROLE = Qt.ItemDataRole.UserRole + 1
 INDEX_ROLE = Qt.ItemDataRole.UserRole + 2
 SECTION_ROLE = Qt.ItemDataRole.UserRole + 3   # stable id of a section, for remembering collapse
+SECTION_MIME = "application/x-burrow-sidebar-section"
+DEFAULT_ORDER = ["bookmarks", "places", "cloud", "tags", "pc", "network"]
 
 PLACES = [
     ("Home", QStandardPaths.StandardLocation.HomeLocation),
@@ -99,6 +101,8 @@ class Sidebar(QTreeWidget):
         self.itemExpanded.connect(self._section_toggled)
         self.itemCollapsed.connect(self._section_toggled)
         self._building = False
+        self._press = None          # (pos, heading key) when a heading is pressed
+        self._drop_y = None         # where the reorder line is drawn while dragging
         config.bookmarksChanged.connect(self.rebuild)
         tags.store().changed.connect(self.rebuild)
         self._drive_sig = None
@@ -194,6 +198,7 @@ class Sidebar(QTreeWidget):
                 it.setForeground(0, QColor(theme.colors()["dim"]))
         for s in (places.RECENT_SERVERS if net is not None else []):
             self._item(net, s[2:], s, "server", icons.network, s)
+        self._apply_order()
         collapsed = set(self.config.get("sidebar_collapsed"))
         for i in range(self.topLevelItemCount()):
             top = self.topLevelItem(i)
@@ -202,6 +207,38 @@ class Sidebar(QTreeWidget):
                 top.setIcon(0, theme.icon("chevron_down" if top.isExpanded() else "chevron", 12))
         self._building = False
         self.highlight(self._current)
+
+    # ----- section order (drag a heading to move the whole section) ---------------
+    def order(self) -> list:
+        saved = [k for k in (self.config.get("sidebar_order") or []) if k in DEFAULT_ORDER]
+        return saved + [k for k in DEFAULT_ORDER if k not in saved]
+
+    def _apply_order(self):
+        rank = {k: i for i, k in enumerate(self.order())}
+        tops = [self.takeTopLevelItem(0) for _ in range(self.topLevelItemCount())]
+        tops.sort(key=lambda it: rank.get(it.data(0, SECTION_ROLE), 99))
+        self.addTopLevelItems(tops)
+
+    def move_section(self, key: str, before: str | None):
+        """Put section `key` just above section `before` (None = at the bottom)."""
+        order = [k for k in self.order() if k != key]
+        order.insert(order.index(before) if before in order else len(order), key)
+        self.config.set("sidebar_order", order)
+        self.rebuild()
+
+    def _drop_slot(self, y: int):
+        """(section key to insert before or None, y of the line) for a pointer height."""
+        shown = [self.topLevelItem(i) for i in range(self.topLevelItemCount())]
+        for top in shown:
+            r = self.visualItemRect(top)
+            if r.isValid() and y < r.center().y():
+                return top.data(0, SECTION_ROLE), r.top()
+        last = shown[-1] if shown else None
+        bottom = 0
+        if last is not None:
+            tail = last.child(last.childCount() - 1) if last.isExpanded() and last.childCount() else last
+            bottom = self.visualItemRect(tail).bottom()
+        return None, bottom
 
     def apply_theme(self, c: dict):
         self.setStyleSheet(theme.sidebar_qss(c))
@@ -266,8 +303,11 @@ class Sidebar(QTreeWidget):
         return
 
     def mousePressEvent(self, ev):
+        self._press = None
         if ev.button() == Qt.MouseButton.LeftButton:
             it = self.itemAt(ev.position().toPoint())
+            if it is not None and it.parent() is None and it.data(0, SECTION_ROLE):
+                self._press = (ev.position().toPoint(), it.data(0, SECTION_ROLE))
             # the chevron at the start of a heading toggles it, even on link headings
             if (it is not None and it.parent() is None and it.data(0, SECTION_ROLE)
                     and ev.position().x() < self.visualItemRect(it).left() + 22):
@@ -280,8 +320,45 @@ class Sidebar(QTreeWidget):
             return
         super().mousePressEvent(ev)
 
+    def mouseMoveEvent(self, ev):
+        if self._press and ev.buttons() & Qt.MouseButton.LeftButton and \
+                (ev.position().toPoint() - self._press[0]).manhattanLength() >= QApplication.startDragDistance():
+            key = self._press[1]
+            self._press = None
+            md = QMimeData()
+            md.setData(SECTION_MIME, key.encode())
+            drag = QDrag(self)
+            drag.setMimeData(md)
+            it = next((self.topLevelItem(i) for i in range(self.topLevelItemCount())
+                       if self.topLevelItem(i).data(0, SECTION_ROLE) == key), None)
+            if it is not None:
+                r = self.visualItemRect(it)
+                drag.setPixmap(self.viewport().grab(r))
+                drag.setHotSpot(ev.position().toPoint() - r.topLeft())
+            drag.exec(Qt.DropAction.MoveAction)
+            self._drop_y = None
+            self.viewport().update()
+            return
+        super().mouseMoveEvent(ev)
+
+    def paintEvent(self, ev):
+        super().paintEvent(ev)
+        if self._drop_y is not None:
+            p = QPainter(self.viewport())
+            p.setPen(QPen(QColor(theme.colors()["accent"]), 2))
+            p.drawLine(6, self._drop_y, self.viewport().width() - 6, self._drop_y)
+            p.end()
+
     def _menu(self, pos):
         it = self.itemAt(pos)
+        if it is not None and it.parent() is None and it.data(0, SECTION_ROLE) and not it.data(0, PATH_ROLE):
+            m = QMenu(self)
+            m.addAction("Drag a heading to reorder sections").setEnabled(False)
+            reset = m.addAction("Reset section order")
+            reset.setEnabled(self.order() != DEFAULT_ORDER)
+            reset.triggered.connect(lambda: (self.config.set("sidebar_order", []), self.rebuild()))
+            m.exec(self.viewport().mapToGlobal(pos))
+            return
         if not it or not it.data(0, PATH_ROLE):
             return
         path = it.data(0, PATH_ROLE)
@@ -348,12 +425,27 @@ class Sidebar(QTreeWidget):
         return ("transfer", paths, target)
 
     def dragEnterEvent(self, ev):
-        if self._paths(ev.mimeData()):
+        if ev.mimeData().hasFormat(SECTION_MIME) and ev.source() is self:
+            ev.acceptProposedAction()
+        elif self._paths(ev.mimeData()):
             ev.acceptProposedAction()
         else:
             ev.ignore()
 
+    def dragLeaveEvent(self, ev):
+        self._drop_y = None
+        self.viewport().update()
+        super().dragLeaveEvent(ev)
+
     def dragMoveEvent(self, ev):
+        if ev.mimeData().hasFormat(SECTION_MIME):
+            _before, y = self._drop_slot(int(ev.position().y()))
+            if y != self._drop_y:
+                self._drop_y = y
+                self.viewport().update()
+            ev.setDropAction(Qt.DropAction.MoveAction)
+            ev.accept()
+            return
         info = self._drop_info(ev)
         if not info:
             ev.ignore()
@@ -366,6 +458,15 @@ class Sidebar(QTreeWidget):
         ev.accept()
 
     def dropEvent(self, ev):
+        if ev.mimeData().hasFormat(SECTION_MIME):
+            key = bytes(ev.mimeData().data(SECTION_MIME)).decode()
+            before, _y = self._drop_slot(int(ev.position().y()))
+            self._drop_y = None
+            ev.setDropAction(Qt.DropAction.MoveAction)
+            ev.accept()
+            if before != key:
+                QTimer.singleShot(0, lambda: self.move_section(key, before))
+            return
         info = self._drop_info(ev)
         if not info:
             ev.ignore()

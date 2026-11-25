@@ -308,7 +308,7 @@ class MainWindow(QMainWindow):
         self.act_hidden.setChecked(config.get("show_hidden"))
         self._sync_preset_combo()
         self._sync_location()
-        self.view().tree.setFocus()
+        self.view().focus_list()
 
     # ----- construction ----------------------------------------------------------
     def _action(self, text, slot, shortcut=None, *, tree=False, checkable=False, icon=None, tip=None):
@@ -365,7 +365,9 @@ class MainWindow(QMainWindow):
         self.act_new_folder = A("New folder", self.new_folder, "Ctrl+Shift+N")
         self.act_new_file = A("New text file", self.new_text_file)
         self.act_hidden = A("Show hidden files", lambda on: self.config.set("show_hidden", on), "Ctrl+H", checkable=True)
-        self.act_folders_first = A("Folders first", lambda on: self.view().set_folders_first(on), checkable=True)
+        self.act_columns_view = A("Columns view", lambda on: self.set_view_mode("columns" if on else "list"),
+                                  "Ctrl+Shift+L", checkable=True)
+        self.act_folders_first = A("Folders first", lambda on: (self.view().set_folders_first(on), self._sync_sort_mode()), checkable=True)
         self.act_bookmark = A("Bookmark this folder", self.toggle_bookmark, "Ctrl+D")
         self.act_settings = A("Settings…", self.open_settings, "Ctrl+,", tip="Settings (Ctrl+,)")
         self.act_terminal = A("Open terminal here", self.open_terminal)
@@ -387,7 +389,7 @@ class MainWindow(QMainWindow):
         self.act_rename = T("Rename", lambda: self.view().edit_current(), "F2")
         self.act_delete = T("Delete", lambda: self.delete(False), "Del")
         self.act_delete_perm = T("Delete permanently", lambda: self.delete(True), "Shift+Del")
-        self.act_select_all = T("Select all", lambda: self.view().tree.selectAll(), "Ctrl+A")
+        self.act_select_all = T("Select all", lambda: self.view().select_all(), "Ctrl+A")
         self.act_invert = T("Invert selection", self.invert_selection, "Ctrl+I")
         self.act_properties = T("Properties", self.properties, "Alt+Return")
         self.act_back_key = T("Back", self.backspace, "Backspace")
@@ -467,6 +469,8 @@ class MainWindow(QMainWindow):
         self.inspector = Inspector()
         self.inspector.set_details_visible(bool(self.config.get("inspector_details")))
         self.inspector.detailsToggled.connect(lambda on: self.config.set("inspector_details", on))
+        self.inspector.split_ratio = float(self.config.get("inspector_split") or 0.6)
+        self.inspector.splitChanged.connect(lambda r: self.config.set("inspector_split", round(r, 3)))
         self.insp_dock = QDockWidget("Inspector")
         self.insp_dock.setObjectName("inspector")
         self.insp_dock.setWidget(self.inspector)
@@ -499,6 +503,22 @@ class MainWindow(QMainWindow):
         self.status_right = QLabel()
         self.statusBar().setSizeGripEnabled(False)
         self.statusBar().addWidget(self.status_left, 1)
+        # Sorting toggle (FilePilot-style): folders on top, or everything mixed by the column
+        self.sort_mode_btn = QToolButton()
+        self.sort_mode_btn.setObjectName("statusToggle")
+        self.sort_mode_btn.setCheckable(True)
+        self.sort_mode_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.sort_mode_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.sort_mode_btn.toggled.connect(self._sort_mode_toggled)
+        self.config.viewChanged.connect(self._view_preset_changed)
+        self.statusBar().addPermanentWidget(self.sort_mode_btn)
+        self.view_mode_btn = QToolButton()
+        self.view_mode_btn.setObjectName("statusToggle")
+        self.view_mode_btn.setCheckable(True)
+        self.view_mode_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.view_mode_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.view_mode_btn.toggled.connect(lambda on: self.set_view_mode("columns" if on else "list"))
+        self.statusBar().addPermanentWidget(self.view_mode_btn)
         self.statusBar().addPermanentWidget(self.status_right)
 
     def _make_menus(self):
@@ -514,8 +534,10 @@ class MainWindow(QMainWindow):
                   self.act_select_all, self.act_invert):
             e.addSeparator() if a is None else e.addAction(a)
         v = mb.addMenu("&View")
-        v.aboutToShow.connect(lambda: self.act_folders_first.setChecked(self.view().model.folders_first))
-        for a in (self.act_inspector, self.act_sidebar, None, self.act_hidden, self.act_folders_first):
+        v.aboutToShow.connect(lambda: (self.act_folders_first.setChecked(self.view().model.folders_first),
+                                       self.act_columns_view.setChecked(self.view().mode == "columns")))
+        for a in (self.act_inspector, self.act_sidebar, None, self.act_columns_view, self.act_hidden,
+                  self.act_folders_first):
             v.addSeparator() if a is None else v.addAction(a)
         self.columns_menu = v.addMenu("Columns")
         self.columns_menu.aboutToShow.connect(self._fill_columns_menu)
@@ -786,7 +808,7 @@ class MainWindow(QMainWindow):
         if remove_empty and src.tabs.count() == 0 and len(self.panes) > 1:
             self._remove_pane(src)
         self.set_active_pane(dst)
-        v.tree.setFocus()
+        v.focus_list()
 
     def move_tab_to_other_pane(self):
         if len(self.panes) < 2:
@@ -801,7 +823,7 @@ class MainWindow(QMainWindow):
             other = self.panes[1] if self.active_pane is self.panes[0] else self.panes[0]
             self.set_active_pane(other)
             if other.tabs.currentWidget():
-                other.tabs.currentWidget().tree.setFocus()
+                other.tabs.currentWidget().focus_list()
 
     def snap_tab(self, src, index, zone, target):
         """A tab dropped on an edge (split) or on the other pane (move)."""
@@ -867,7 +889,7 @@ class MainWindow(QMainWindow):
         self.tabs.setTabToolTip(idx, display_path(v.path))
         if activate:
             self.tabs.setCurrentIndex(idx)
-            v.tree.setFocus()
+            v.focus_list()
         return v
 
     def close_tab(self, index, pane=None):
@@ -975,6 +997,43 @@ class MainWindow(QMainWindow):
                 s += f" · {human_size(sum(e.size for e in sized))}"
             parts.append(s)
         self.status_left.setText("     ".join(parts))
+        self._sync_sort_mode(v)
+
+    def _sync_sort_mode(self, v=None):
+        v = v or self.view()
+        if v is None:
+            return
+        mixed = not v.model.folders_first
+        self.sort_mode_btn.blockSignals(True)
+        self.sort_mode_btn.setChecked(mixed)
+        self.sort_mode_btn.blockSignals(False)
+        self.sort_mode_btn.setText("Sort: mixed" if mixed else "Sort: folders first")
+        cols = v.mode == "columns"
+        self.sort_mode_btn.setVisible(not v.columns_active())     # columns keep folders on top
+        self.view_mode_btn.blockSignals(True)
+        self.view_mode_btn.setChecked(cols)
+        self.view_mode_btn.blockSignals(False)
+        self.view_mode_btn.setText("View: columns" if cols else "View: list")
+        self.view_mode_btn.setToolTip("Switch this tab between the list and columns (Ctrl+Shift+L)")
+        self.sort_mode_btn.setToolTip("Files, folders and archives sorted together by the column — click for folders first"
+                                      if mixed else "Folders on top, then files — click to sort everything by the column only")
+
+    def set_view_mode(self, mode: str):
+        """List or columns for this tab; new tabs open the same way."""
+        v = self.view()
+        if v is not None:
+            v.set_mode(mode)
+        self.config.set("view_mode", mode)
+        self._sync_sort_mode(v)
+
+    def _view_preset_changed(self, _src=None):
+        QTimer.singleShot(0, self, self._sync_sort_mode)    # after the views have re-applied it
+
+    def _sort_mode_toggled(self, mixed: bool):
+        v = self.view()
+        if v is not None:
+            v.set_folders_first(not mixed)     # saved to the view preset, so every folder follows
+        self._sync_sort_mode(v)
 
     def _update_inspector(self):
         if not self.insp_dock.isVisible():
@@ -1045,7 +1104,7 @@ class MainWindow(QMainWindow):
             self.new_tab(path, activate=False)
         else:
             self.view().navigate(path)
-            self.view().tree.setFocus()
+            self.view().focus_list()
 
     def _address_entered(self):
         text = self.address.text().strip()
@@ -1065,24 +1124,24 @@ class MainWindow(QMainWindow):
             else:
                 QMessageBox.warning(self, APP_NAME, f"Can't find “{text}”.\nCheck the spelling and try again.")
                 return
-        v.tree.setFocus()
+        v.focus_list()
 
     def _address_escaped(self):
         self.address.setText(display_path(self.view().path))
         self.address_area.stop_edit()
-        self.view().tree.setFocus()
+        self.view().focus_list()
 
     def _sidebar_open(self, path, in_new_tab):
         if in_new_tab:
             self.new_tab(path, activate=False)
         else:
             self.view().navigate(path)
-            self.view().tree.setFocus()
+            self.view().focus_list()
 
     # ----- context menu ------------------------------------------------------------------
     def _context_menu(self, v: FolderView, pos):
-        idx = v.tree.indexAt(pos)
-        if not idx.isValid():
+        where, on_item = v.menu_pos(pos)
+        if not on_item and not v.columns_active():
             v.tree.clearSelection()
         entries = v.selected_entries()
         m = QMenu(self)
@@ -1131,7 +1190,7 @@ class MainWindow(QMainWindow):
                 m.addAction(self.act_terminal)
                 m.addAction(self.act_explorer)
                 m.addAction(self.act_properties)
-        m.exec(v.tree.viewport().mapToGlobal(pos))
+        m.exec(where)
 
     # ----- file operations ---------------------------------------------------------------
     def _selected(self):
@@ -1335,7 +1394,7 @@ class MainWindow(QMainWindow):
         v.clear_filter()
         v.refresh()
         v.select_paths([p], p)
-        v.tree.setFocus()
+        v.focus_list()
         v.edit_current()
 
     def new_folder(self):

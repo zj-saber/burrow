@@ -5,6 +5,8 @@ A tabbed file manager for Windows, written in Python with Qt (PySide6).
 ## Features
 
 - **Browsing**: address bar with path completion (`%USERPROFILE%` and `This PC` work), back/forward/up (also on mouse buttons), natural sort ("file2" comes before "file10"), folders first, and show/hide hidden files.
+- **Mixed or folders-first sorting**: the *Sort* switch at the bottom right puts folders on top, or sorts files, folders and archives together purely by the column you sorted on (FilePilot-style). It applies to every folder.
+- **Columns view** (optional, like macOS Finder or One Commander): *View: list / columns* at the bottom right, View ▸ Columns view, or Ctrl+Shift+L. Each folder you pick opens in a new column to the right. This PC, Network and tag pages stay a list.
 - **Type to filter**: start typing in any folder to filter it by name. Backspace removes a character, Esc clears the filter.
 - **File operations**: cut, copy and paste (the clipboard works with Explorer), rename in place with F2 or a slow click, delete to the Recycle Bin, permanent delete, new folder or text file, Copy to / Move to, and drag and drop.
 - **TeraCopy integration**: paste, drag and drop, Copy to and Move to all hand the transfer to TeraCopy when it's installed. It is found automatically, or you can set its path in Settings. **Paste with built-in copier** skips TeraCopy for one paste. Duplicating an item in its own folder always uses the built-in copier.
@@ -13,8 +15,8 @@ A tabbed file manager for Windows, written in Python with Qt (PySide6).
 - **Split panes** (FilePilot-style): drag a tab down out of its tab bar and drop it on the right, left, top or bottom edge to snap it into a split; drop it on the other pane to move it. Also View ▸ Split side by side (Ctrl+\), Split stacked (Ctrl+Shift+\), Move tab to other pane (Ctrl+Alt+M), Switch pane (F6), Single pane, or right-click a tab. The address bar follows the active pane and the split is restored next time.
 - **Multiple windows**: Ctrl+N, a tab's right-click ▸ Open in new window, and Win+E (Settings: Win+E opens a new window or a new tab).
 - **EPUB books** in the inspector: cover, title/author/publisher, and a chapter reader (‹ › chapters, Ctrl+wheel text size, ⤢ large reader).
-- **Collapsible details**: click *Details* in the inspector to fold the file information away and give the preview the space.
-- **Bookmarks sidebar** (Ctrl+D), plus common places and drives. Each section collapses: click a heading, or use the arrow beside This PC and Network. Burrow remembers which sections you closed. Drop files on a sidebar entry to copy or move them there, or drop folders on "Bookmarks" to bookmark them.
+- **Collapsible details**: click *Details* in the inspector to fold the file information away and give the preview the space. Drag the line under a photo, PDF or video to make the preview taller or shorter; Burrow remembers the height.
+- **Bookmarks sidebar** (Ctrl+D), plus common places and drives. Each section collapses: click a heading, or use the arrow beside This PC and Network. Burrow remembers which sections you closed. Drag a heading up or down to reorder the sections (right-click a heading to reset the order). Drop files on a sidebar entry to copy or move them there, or drop folders on "Bookmarks" to bookmark them.
 - **Inspector** (Alt+P): plays video and audio (Space plays or pauses, ← / → seek 5 s and Shift+← / → seek 30 s; video opens on a poster frame, audio shows cover art and tags), previews images and any text file (YAML, JSON, INI, TOML, XML, code, logs, subtitles... with syntax colors) and shows file details: created, modified and accessed dates, attributes, and folder contents.
 - **Cloud drives**: OneDrive, iCloud Drive/Photos, Dropbox, Google Drive, Box and others are found through Windows' sync-root registry and shown in the sidebar and in This PC, with each provider's own icon. Files that are only in the cloud are never downloaded just to preview them.
 - **Network drives**: mapped drives show up (including remembered ones that are disconnected; opening one reconnects it), along with a **Network** page. Type `\\computer` to see its shared folders. Computers you open are remembered in the sidebar. *Tools ▸ Map network drive…* and *Disconnect…* use the standard Windows dialogs.
@@ -60,6 +62,7 @@ The first run creates a `.venv` and installs PySide6. Settings are saved in `%AP
 | Ctrl+Shift+V | Paste with TeraCopy |
 | Ctrl+Shift+C | Copy path |
 | Ctrl+H | Toggle hidden files |
+| Ctrl+Shift+L | List / columns view |
 | Ctrl+D | Bookmark folder |
 | Alt+Enter | Properties |
 | Ctrl+, | Settings |

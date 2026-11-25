@@ -120,10 +120,11 @@ class MediaPreview(QWidget):
         self._audio.setVolume(self.volume)
         self._player.setAudioOutput(self._audio)
         self._video = QVideoWidget(self)
-        self._video.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self._video.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
+        self._video.setMinimumHeight(90)
         self._video.setStyleSheet("background: black;")
         self._video.hide()
-        self.lay.insertWidget(0, self._video)
+        self.lay.insertWidget(0, self._video, 1)
         self._player.setVideoOutput(self._video)
         p = self._player
         p.positionChanged.connect(self._on_position)
@@ -287,10 +288,9 @@ class MediaPreview(QWidget):
         self.time.setText(f"0:00 / {fmt_time(self._player.duration())}")
 
     def _fit_video(self, res: QSize):
-        w = max(160, self.width() or 300)
-        h = int(w * res.height() / max(1, res.width()))
-        top = self.parentWidget().height() if self.parentWidget() else 600
-        self._video.setFixedHeight(max(90, min(h, int(top * 0.45))))
+        # the video now fills the inspector's preview area (its height is set by the
+        # drag handle); QVideoWidget letterboxes to keep the aspect ratio
+        self._video.setMinimumHeight(90)
 
     def resizeEvent(self, ev):
         super().resizeEvent(ev)
