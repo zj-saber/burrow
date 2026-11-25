@@ -96,6 +96,7 @@ DEFAULTS = {
     "preview_text": True,
     "text_syntax_colors": True,
     "preview_archives": True,
+    "preview_epub": True,
     "media_arrow_seek": True,
     "sidebar_places": True,
     "sidebar_cloud": True,
@@ -103,6 +104,10 @@ DEFAULTS = {
     "sidebar_network": True,
     "single_instance": True,        # later launches open as tabs
     "quick_access_sync": True,      # bookmarks pinned/unpinned in Explorer Quick Access
+    "inspector_details": True,      # file details shown under the preview
+    "win_e_opens": "window",        # Win+E: "window" or "tab"
+    "split": "",                    # "", "h" (side by side) or "v" (stacked)
+    "session_tabs2": [],
     "win_e": False,                 # Win+E opens Burrow (keyboard hook while Burrow runs)
     "run_in_background": False,     # tray icon, start with Windows, closing hides
     "show_menubar": False,

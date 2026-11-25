@@ -210,6 +210,7 @@ class SettingsDialog(QDialog):
         f.addRow(check("preview_text", "Text files (YAML, JSON, code, logs…)"))
         f.addRow(check("text_syntax_colors", "Syntax colors in text previews"))
         f.addRow(check("preview_archives", "Archive contents (zip, rar, 7z…)"))
+        f.addRow(check("preview_epub", "EPUB books (cover, details and a chapter reader)"))
         f.addRow(note("Turned-off previews still show the file's details."))
 
         # ----- Sidebar & list ------------------------------------------------------
@@ -236,6 +237,11 @@ class SettingsDialog(QDialog):
         f.addRow(note("Desktop, Explorer, the Run box, shortcuts and apps that open a folder go to Burrow, as tabs."))
         f.addRow(check("win_e", "Open Burrow with Win+E",
                        "Burrow catches Win+E while it runs, so Explorer doesn't open."))
+        self.win_e_opens = QComboBox()
+        self.win_e_opens.addItem("a new window", "window")
+        self.win_e_opens.addItem("a new tab", "tab")
+        self.win_e_opens.setCurrentIndex(max(self.win_e_opens.findData(config.get("win_e_opens")), 0))
+        f.addRow("Win+E opens:", self.win_e_opens)
         f.addRow(check("run_in_background", "Keep Burrow running in the background and start it with Windows",
                        "A tray icon keeps Burrow ready, so Win+E always works. Closing the window hides it; "
                        "quit from the tray icon or File ▸ Exit."))
@@ -328,6 +334,7 @@ class SettingsDialog(QDialog):
             "date_format": self.date_fmt.currentData(),
             "theme": self.theme.currentData(),
             "palette": self.palette.currentData(),
+            "win_e_opens": self.win_e_opens.currentData(),
         })
         self.config.update(values)
         self.accept()

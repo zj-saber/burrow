@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from datetime import datetime
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFontDatabase, QImageReader, QPixmap
 from PySide6.QtWidgets import (QFormLayout, QHeaderView, QLabel, QPlainTextEdit, QSizePolicy,
                                QTreeWidget, QTreeWidgetItem, QVBoxLayout,
@@ -42,6 +42,8 @@ def _fmt_time(ts) -> str:
 
 
 class Inspector(QWidget):
+    detailsToggled = Signal(bool)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("inspector")
@@ -86,6 +88,15 @@ class Inspector(QWidget):
         self.zoom.popOutRequested.connect(self._pop_out)
         self.lay.addWidget(self.zoom, 0)
         self.lay.addWidget(self.title)
+        # "Details" header: folds the file information away to give the preview more room
+        from PySide6.QtWidgets import QToolButton
+        self.details_btn = QToolButton()
+        self.details_btn.setObjectName("detailsToggle")
+        self.details_btn.setAutoRaise(True)
+        self.details_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.details_btn.setToolTip("Show or hide the file details")
+        self.details_btn.clicked.connect(lambda: self.set_details_visible(not self.details.isVisible(), user=True))
+        self.lay.addWidget(self.details_btn)
         self.lay.addWidget(self.details)
         self.lay.addWidget(self.note)
         self.lay.addWidget(self.text, 0)
@@ -98,6 +109,11 @@ class Inspector(QWidget):
         self.archive_tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.archive_tree.hide()
         self.lay.addWidget(self.archive_tree, 0)
+        from .epub import EpubReader
+        self.epub = EpubReader(self)
+        self.epub.popOutRequested.connect(self._pop_out_epub)
+        self.epub.hide()
+        self.lay.addWidget(self.epub, 0)
         self.lay.addStretch(1)
         self._stretch_index = self.lay.count() - 1
 
@@ -107,12 +123,23 @@ class Inspector(QWidget):
     _hl = None
     _shown = None
 
+    def set_details_visible(self, on: bool, user: bool = False):
+        self.details.setVisible(on)
+        self.details_btn.setText(("▾  Details" if on else "▸  Details"))
+        if self.zoom.isVisible():
+            self._show_zoom(True)
+        if user:
+            self.detailsToggled.emit(on)
+
     def _reset(self):
         self._shown = None
         self.media.unload()
         self._raw_req = getattr(self, "_raw_req", 0) + 1
         self._archive_req = getattr(self, "_archive_req", 0) + 1
         self.archive_tree.clear()
+        self.epub.clear()
+        self._epub_req = getattr(self, "_epub_req", 0) + 1
+        self.lay.setStretchFactor(self.epub, 0)
         self.zoom.clear()
         self._show_zoom(False)
         self._show_archive(False)
@@ -307,7 +334,10 @@ class Inspector(QWidget):
             self._set_note("Large file on a network location: no automatic preview.")
             return
         pref = lambda k: self.prefs.get(k, True)   # noqa: E731
-        if not pref("preview_images") and (e.ext in raw.RAW_EXTS or e.ext in raw.SHELL_IMAGE_EXTS
+        if e.ext == "epub":
+            if pref("preview_epub"):
+                self._preview_epub(e)
+        elif not pref("preview_images") and (e.ext in raw.RAW_EXTS or e.ext in raw.SHELL_IMAGE_EXTS
                                          or e.ext == "pdf" or e.ext in self._img_exts):
             pass
         elif not pref("preview_media") and (e.ext in VIDEO_EXTS or e.ext in AUDIO_EXTS or e.ext in raw.BRAW_EXTS):
@@ -424,6 +454,52 @@ class Inspector(QWidget):
         self.preview.setFixedHeight(0)
         self._show_zoom(True)
 
+    def _preview_epub(self, e: Entry):
+        """EPUB: cover, book details and a chapter reader. The book is read off-thread."""
+        from . import epub
+        self._shown = e.path
+        path = e.path
+        self._epub_req = getattr(self, "_epub_req", 0) + 1
+        req = self._epub_req
+        self._set_note("Opening book…")
+        places.run_async(lambda: epub.read_book(path), lambda res: self._epub_ready(path, res, req))
+
+    def _epub_ready(self, path, res, req=0):
+        if self._shown != path or req != getattr(self, "_epub_req", 0):
+            return
+        self._set_note("")
+        if not isinstance(res, dict):
+            self._set_note(f"Can't read this book: {res}")
+            return
+        if res.get("cover"):
+            img = QPixmap()
+            if img.loadFromData(res["cover"]):
+                h = min(220, int(self.height() * 0.3))
+                self._pix = None
+                self.preview.setPixmap(img.scaledToHeight(h, Qt.TransformationMode.SmoothTransformation))
+                self.preview.setFixedHeight(h + 6)
+        if res.get("title"):
+            self.title.setText(res["title"])
+        self._row("Author", res.get("author", ""))
+        self._row("Publisher", res.get("publisher", ""))
+        self._row("Published", res.get("date", ""))
+        self._row("Language", res.get("language", ""))
+        self._row("Chapters", str(res.get("chapters", "")))
+        desc = res.get("description", "")
+        if desc:
+            self._set_note(desc[:420] + ("…" if len(desc) > 420 else ""))
+        if res.get("spine"):
+            self.epub.open(path, res["spine"])
+            self.epub.show()
+            self.lay.setStretchFactor(self.epub, 1)
+            self.lay.setStretch(self._stretch_index, 0)
+
+    def _pop_out_epub(self):
+        if self.epub.book:
+            import os
+            from .epub import EpubWindow
+            EpubWindow(self.epub, os.path.basename(self.epub.book), self.window()).show()
+
     def _preview_raw(self, e: Entry):
         """Camera RAW: the embedded full-size JPEG (or Windows' RAW thumbnail), read off-thread."""
         self._shown = e.path
@@ -502,7 +578,8 @@ class Inspector(QWidget):
         if on:   # size the box to the picture/page shape, at most 60% of the panel
             w = max(160, self.width() - 32)
             h = int(w * self.zoom.aspect()) + 34
-            self.zoom.setMaximumHeight(max(140, min(h, int(self.height() * 0.6))))
+            cap = 0.6 if self.details.isVisible() else 0.88     # more room when details are folded
+            self.zoom.setMaximumHeight(max(140, min(h, int(self.height() * cap))))
         self.zoom.setVisible(on)
         self.lay.setStretchFactor(self.zoom, 3 if on else 0)
         if on:

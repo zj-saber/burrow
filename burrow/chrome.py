@@ -3,11 +3,58 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import QObject, Qt, QTimer, Signal
+from PySide6.QtCore import QMimeData, QObject, QPoint, Qt, QTimer, Signal
+from PySide6.QtGui import QDrag, QMouseEvent
 from PySide6.QtWidgets import (QHBoxLayout, QLabel, QLineEdit, QMenu, QStackedWidget, QTabBar,
                                QToolButton, QWidget)
 
 from .model import DRIVES, NETWORK
+
+
+TAB_MIME = "application/x-burrow-tab"
+
+
+class SnapTabBar(QTabBar):
+    """A tab bar whose tabs can be dragged out (downwards) to snap them into a split pane.
+    Sideways drags still reorder tabs as usual."""
+    dragging = None            # (TabHost, index) while a tab is being dragged out
+
+    def __init__(self, host):
+        super().__init__()
+        self.host = host
+        self._press = None
+
+    def mousePressEvent(self, ev):
+        if ev.button() == Qt.MouseButton.LeftButton:
+            i = self.tabAt(ev.position().toPoint())
+            self._press = (ev.position().toPoint(), i) if i >= 0 else None
+        super().mousePressEvent(ev)
+
+    def mouseMoveEvent(self, ev):
+        if self._press and ev.buttons() & Qt.MouseButton.LeftButton:
+            start, index = self._press
+            if abs(ev.position().y() - start.y()) > 28:          # pulled out of the bar
+                self._press = None
+                # end the bar's own reorder drag first
+                super().mouseReleaseEvent(QMouseEvent(ev.Type.MouseButtonRelease, start.toPointF(),
+                                                      ev.globalPosition(), Qt.MouseButton.LeftButton,
+                                                      Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier))
+                drag = QDrag(self)
+                md = QMimeData()
+                md.setData(TAB_MIME, str(index).encode())
+                drag.setMimeData(md)
+                drag.setPixmap(self.grab(self.tabRect(index)))
+                SnapTabBar.dragging = (self.host, index)
+                try:
+                    drag.exec(Qt.DropAction.MoveAction)
+                finally:
+                    SnapTabBar.dragging = None
+                return
+        super().mouseMoveEvent(ev)
+
+    def mouseReleaseEvent(self, ev):
+        self._press = None
+        super().mouseReleaseEvent(ev)
 
 
 class TabHost(QObject):
@@ -18,7 +65,8 @@ class TabHost(QObject):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        b = self.bar = QTabBar()
+        b = self.bar = SnapTabBar(self)
+        self.pane = None
         b.setMovable(True)
         self.close_icon = None
         b.setDocumentMode(True)

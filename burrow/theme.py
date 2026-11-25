@@ -188,6 +188,7 @@ QTabBar::tab {{
     border-top-left-radius: 8px; border-top-right-radius: 8px;
 }}
 QTabBar::tab:selected {{ background: {c['base']}; color: {c['text']}; }}
+#tabstrip[active="true"] QTabBar::tab:selected {{ border-top: 2px solid {c['accent']}; }}
 QTabBar::tab:hover:!selected {{ background: {c['chip']}; color: {c['text']}; }}
 QTabBar QToolButton {{ background: {c['window']}; border: none; }}
 QTabBar QToolButton#tabclose {{ background: transparent; border-radius: 4px; padding: 1px; }}
@@ -265,6 +266,8 @@ def inspector_qss(c):
 #inspector QLabel {{ background: transparent; }}
 #inspector QLabel[role="key"] {{ color: {c['dim']}; }}
 #inspector QLabel[role="note"] {{ color: {c['dim']}; }}
+#inspector QToolButton#detailsToggle {{ color: {c['dim']}; border: none; padding: 2px 0; text-align: left; }}
+#inspector QToolButton#detailsToggle:hover {{ color: {c['text']}; }}
 #inspector QPlainTextEdit {{ background: {c['base']}; border: 1px solid {c['border']}; border-radius: 8px;
                               padding: 4px; color: {c['text']}; }}
 """

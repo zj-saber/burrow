@@ -16,6 +16,9 @@ from PySide6.QtCore import QItemSelection, QItemSelectionModel
 
 from . import dialogs, fileops, foldercolor, integration, tags, theme
 from .chrome import AddressArea, TabHost
+from PySide6.QtCore import QPoint, QRect
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import QSplitter
 from .config import APP_NAME, Config
 from .folderview import FolderView, display_path, normalize_path, title_for
 from .inspector import Inspector
@@ -88,11 +91,163 @@ class JobRunner(QObject):
         self.finished.emit(self)
 
 
+
+
+TAB_MIME_APP = "application/x-burrow-tab"
+WINDOWS: list = []          # every open MainWindow; WINDOWS[0] is the primary (tray, Win+E, single instance)
+LAST_ACTIVE = []            # most recently activated window
+
+
+class Pane(QWidget):
+    """One side of a split: its own tab strip and folder views."""
+
+    def __init__(self, win):
+        super().__init__()
+        from .chrome import TabHost
+        self.win = win
+        self.tabs = TabHost(self)
+        self.tabs.pane = self
+        self.strip = QWidget()
+        self.strip.setObjectName("tabstrip")
+        self.strip.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.strip.installEventFilter(win)
+        ts = QHBoxLayout(self.strip)
+        ts.setContentsMargins(8, 6, 8, 0)
+        ts.setSpacing(2)
+        bar = self.tabs.bar
+        bar.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        bar.installEventFilter(win)
+        bar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        bar.customContextMenuRequested.connect(lambda pos: win._tab_menu(self, pos))
+        ts.addWidget(bar, 0, Qt.AlignmentFlag.AlignBottom)
+        self.plus_btn = QToolButton()
+        self.plus_btn.setObjectName("plus")
+        self.plus_btn.setToolTip("New tab (Ctrl+T)")
+        self.plus_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.plus_btn.clicked.connect(lambda: (win.set_active_pane(self), win.new_tab()))
+        ts.addWidget(self.plus_btn, 0, Qt.AlignmentFlag.AlignBottom)
+        ts.addStretch(1)
+        self.lay = QVBoxLayout(self)
+        self.lay.setContentsMargins(0, 0, 0, 0)
+        self.lay.setSpacing(0)
+        self.lay.addWidget(self.strip)
+        self.lay.addWidget(self.tabs.stack, 1)
+        self.tabs.tabCloseRequested.connect(lambda i: win.close_tab(i, self))
+        self.tabs.currentChanged.connect(lambda _i: win._pane_changed(self))
+
+    def set_active(self, on: bool):
+        if self.strip.property("active") != on:
+            self.strip.setProperty("active", on)
+            self.strip.setStyleSheet(self.strip.styleSheet())     # re-evaluate [active="true"]
+
+
+class DropArea(QWidget):
+    """Holds the panes; a tab dragged out of a tab bar can be dropped on an edge to split
+    (left/right/top/bottom) or on the other pane to move it there."""
+
+    def __init__(self, win):
+        super().__init__()
+        self.win = win
+        self.setAcceptDrops(True)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        self.overlay = QWidget(self)
+        self.overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.overlay.hide()
+        self._zone = None
+
+    def style_overlay(self, accent: str):
+        c = QColor(accent)
+        self.overlay.setStyleSheet(f"background: rgba({c.red()},{c.green()},{c.blue()},60);"
+                                   f" border: 2px solid {accent}; border-radius: 8px;")
+
+    def _zone_at(self, pos):
+        from .chrome import SnapTabBar
+        src = SnapTabBar.dragging
+        if src is None:
+            return None
+        for p in self.win.panes:
+            tl = p.mapTo(self, QPoint(0, 0))
+            r = QRect(tl, p.size())
+            if not r.contains(pos):
+                continue
+            if len(self.win.panes) > 1:
+                return ("move", p, r) if p.tabs is not src[0] else None
+            fx = (pos.x() - r.left()) / max(1, r.width())
+            fy = (pos.y() - r.top()) / max(1, r.height())
+            w2, h2 = r.width() // 2, r.height() // 2
+            if fx < 0.3:
+                return ("left", p, QRect(r.left(), r.top(), w2, r.height()))
+            if fx > 0.7:
+                return ("right", p, QRect(r.left() + w2, r.top(), r.width() - w2, r.height()))
+            if fy < 0.3:
+                return ("top", p, QRect(r.left(), r.top(), r.width(), h2))
+            if fy > 0.7:
+                return ("bottom", p, QRect(r.left(), r.top() + h2, r.width(), r.height() - h2))
+            return None
+        return None
+
+    def dragEnterEvent(self, ev):
+        if ev.mimeData().hasFormat(TAB_MIME_APP):
+            ev.acceptProposedAction()
+        else:
+            ev.ignore()
+
+    def dragMoveEvent(self, ev):
+        if not ev.mimeData().hasFormat(TAB_MIME_APP):
+            ev.ignore()
+            return
+        self._zone = self._zone_at(ev.position().toPoint())
+        if self._zone:
+            self.overlay.setGeometry(self._zone[2].adjusted(4, 4, -4, -4))
+            self.overlay.show()
+            self.overlay.raise_()
+            ev.acceptProposedAction()
+        else:
+            self.overlay.hide()
+            ev.accept()
+
+    def dragLeaveEvent(self, ev):
+        self.overlay.hide()
+
+    def dropEvent(self, ev):
+        from .chrome import SnapTabBar
+        self.overlay.hide()
+        zone, src = self._zone, SnapTabBar.dragging
+        self._zone = None
+        if not zone or not src:
+            ev.ignore()
+            return
+        ev.acceptProposedAction()
+        host, index = src
+        QTimer.singleShot(0, lambda: self.win.snap_tab(host.pane, index, zone[0], zone[1]))
+
+
+def open_new_window(config, paths=None):
+    """Ctrl+N / Win+E: another Burrow window (same settings, its own tabs)."""
+    w = MainWindow(config, paths or [config.get("new_tab_path") or HOME], primary=False)
+    if WINDOWS:
+        g = WINDOWS[-1].geometry() if WINDOWS[-1].isVisible() else WINDOWS[0].geometry()
+        w.setGeometry(g.translated(32, 32))
+    w.show()
+    w.bring_to_front()
+    return w
+
+
+def route_external(args):
+    """A launch handed over by Windows or a second Burrow: open it in the most recent window."""
+    target = next((w for w in reversed(LAST_ACTIVE) if w in WINDOWS and w.isVisible()), None) or WINDOWS[0]
+    target.open_external(args)
+
+
 class MainWindow(QMainWindow):
-    def __init__(self, config: Config, paths: list[str]):
+    def __init__(self, config: Config, paths: list[str], primary: bool = True):
         super().__init__()
         self.config = config
         places.RECENT_SERVERS[:] = [s for s in config.get("recent_servers") if places.is_server(s)][:8]
+        self.primary = primary
+        self.panes: list = []
+        self.active_pane = None
         self.jobs: list[JobRunner] = []
         self.closed_tabs: list[str] = []
         self.tree_actions: list[QAction] = []
@@ -138,6 +293,18 @@ class MainWindow(QMainWindow):
             self.new_tab(p, activate=False, after_current=False)
         cur = config.get("session_current") if not paths else 0
         self.tabs.setCurrentIndex(min(max(cur, 0), self.tabs.count() - 1))
+        second = [p for p in config.get("session_tabs2") if restorable(p)] if (primary and not paths) else []
+        if second and config.get("split") in ("h", "v"):     # restore the split
+            self.splitter.setOrientation(Qt.Orientation.Horizontal if config.get("split") == "h" else Qt.Orientation.Vertical)
+            p2 = self._add_pane()
+            self.active_pane = p2
+            for p in second:
+                self.new_tab(p, activate=False, after_current=False)
+            p2.tabs.setCurrentIndex(0)
+            self.active_pane = self.panes[0]
+            self._place_navbar()
+            QTimer.singleShot(0, lambda: self.splitter.setSizes([1, 1]))
+        WINDOWS.append(self)
         self.act_hidden.setChecked(config.get("show_hidden"))
         self._sync_preset_combo()
         self._sync_location()
@@ -185,6 +352,12 @@ class MainWindow(QMainWindow):
         self.act_address = A("Edit address", self.focus_address, ["Ctrl+L", "Alt+D", "F4"])
         self.act_filter = A("Filter…", lambda: self.view().focus_filter(), "Ctrl+F")
         self.act_new_tab = A("New tab", lambda: self.new_tab(), "Ctrl+T")
+        self.act_new_window = A("New window", lambda: open_new_window(self.config), "Ctrl+N")
+        self.act_split_h = A("Split side by side", lambda: self.split(Qt.Orientation.Horizontal), "Ctrl+\\")
+        self.act_split_v = A("Split stacked", lambda: self.split(Qt.Orientation.Vertical), "Ctrl+Shift+\\")
+        self.act_unsplit = A("Single pane", self.unsplit)
+        self.act_move_pane = A("Move tab to other pane", self.move_tab_to_other_pane, "Ctrl+Alt+M")
+        self.act_other_pane = A("Switch pane", self.focus_other_pane, "F6")
         self.act_close_tab = A("Close tab", lambda: self.close_tab(self.tabs.currentIndex()), "Ctrl+W")
         self.act_reopen_tab = A("Reopen closed tab", self.reopen_tab, "Ctrl+Shift+T")
         self.act_next_tab = A("Next tab", lambda: self.cycle_tab(1), "Ctrl+Tab")
@@ -227,28 +400,13 @@ class MainWindow(QMainWindow):
         return b
 
     def _make_ui(self):
-        # Tab strip on top (browser style), then the navigation bar, then the folder views.
-        self.tabs = TabHost(self)
-        self.tabs.tabCloseRequested.connect(self.close_tab)
-        self.tabs.currentChanged.connect(lambda _i: self._sync_location())
-        self.tabs.tabBar().installEventFilter(self)
-
-        self.tabstrip = QWidget()
-        self.tabstrip.setObjectName("tabstrip")
-        self.tabstrip.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.tabstrip.installEventFilter(self)
-        ts = QHBoxLayout(self.tabstrip)
-        ts.setContentsMargins(8, 6, 8, 0)
-        ts.setSpacing(2)
-        self.tabs.bar.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-        ts.addWidget(self.tabs.bar, 0, Qt.AlignmentFlag.AlignBottom)
-        self.plus_btn = QToolButton()
-        self.plus_btn.setObjectName("plus")
-        self.plus_btn.setToolTip("New tab (Ctrl+T)")
-        self.plus_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.plus_btn.clicked.connect(lambda: self.new_tab())
-        ts.addWidget(self.plus_btn, 0, Qt.AlignmentFlag.AlignBottom)
-        ts.addStretch(1)
+        # Panes (each with its own tab strip) live in a splitter inside the drop area. With one
+        # pane the navigation bar sits between its tabs and files; when split it moves on top.
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.splitter.setChildrenCollapsible(False)
+        self.splitter.setHandleWidth(5)
+        self.drop_area = DropArea(self)
+        self.drop_area.layout().addWidget(self.splitter)
 
         self.navbar = QWidget()
         self.navbar.setObjectName("navbar")
@@ -286,13 +444,14 @@ class MainWindow(QMainWindow):
         nb.addSpacing(6)
 
         central = QWidget()
-        cv = QVBoxLayout(central)
-        cv.setContentsMargins(0, 0, 0, 0)
-        cv.setSpacing(0)
-        cv.addWidget(self.tabstrip)
-        cv.addWidget(self.navbar)
-        cv.addWidget(self.tabs.stack, 1)
+        self.central_layout = QVBoxLayout(central)
+        self.central_layout.setContentsMargins(0, 0, 0, 0)
+        self.central_layout.setSpacing(0)
+        self.central_layout.addWidget(self.drop_area, 1)
         self.setCentralWidget(central)
+        self._add_pane()
+        self._place_navbar()
+        QApplication.instance().focusChanged.connect(self._focus_changed)
 
         self.sidebar = Sidebar(self.config)
         self.sidebar.openRequested.connect(self._sidebar_open)
@@ -306,6 +465,8 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.side_dock)
 
         self.inspector = Inspector()
+        self.inspector.set_details_visible(bool(self.config.get("inspector_details")))
+        self.inspector.detailsToggled.connect(lambda on: self.config.set("inspector_details", on))
         self.insp_dock = QDockWidget("Inspector")
         self.insp_dock.setObjectName("inspector")
         self.insp_dock.setWidget(self.inspector)
@@ -343,7 +504,7 @@ class MainWindow(QMainWindow):
     def _make_menus(self):
         mb = self.menuBar()
         f = mb.addMenu("&File")
-        for a in (self.act_new_tab, self.act_reopen_tab, None, self.act_new_folder, self.act_new_file,
+        for a in (self.act_new_window, self.act_new_tab, self.act_reopen_tab, None, self.act_new_folder, self.act_new_file,
                   None, self.act_close_tab, self.act_quit):
             f.addSeparator() if a is None else f.addAction(a)
         e = mb.addMenu("&Edit")
@@ -360,6 +521,9 @@ class MainWindow(QMainWindow):
         self.columns_menu.aboutToShow.connect(self._fill_columns_menu)
         self.presets_menu = v.addMenu("View presets (all folders)")
         self.presets_menu.aboutToShow.connect(self._fill_presets_menu)
+        v.addSeparator()
+        for a in (self.act_split_h, self.act_split_v, self.act_unsplit, self.act_move_pane, self.act_other_pane):
+            v.addAction(a)
         v.addSeparator()
         v.addAction(self.act_filter)
         v.addAction(self.act_refresh)
@@ -461,7 +625,11 @@ class MainWindow(QMainWindow):
         tf.setBold(True)
         tf.setPointSizeF(tf.pointSizeF() * 1.15)
         self.inspector.title.setFont(tf)
-        self.tabstrip.setStyleSheet(theme.tabstrip_qss(c))
+        self._theme = c
+        for p in self.panes:
+            self._theme_pane(p)
+        self.splitter.setStyleSheet(f"QSplitter::handle {{ background: {c['border']}; }}")
+        self.drop_area.style_overlay(c['accent'])
         self.navbar.setStyleSheet(theme.navbar_qss(c))
         self.statusBar().setStyleSheet(theme.statusbar_qss(c))
         self.inspector.setStyleSheet(theme.inspector_qss(c))
@@ -473,11 +641,8 @@ class MainWindow(QMainWindow):
                           (self.act_refresh, "refresh"), (self.act_inspector, "inspector"),
                           (self.act_sidebar, "sidebar"), (self.act_settings, "settings")):
             act.setIcon(theme.icon(name))
-        self.tabs.set_close_icon(theme.icon("close", 12))
         self.menu_btn.setIcon(theme.icon("menu"))
-        self.plus_btn.setIcon(theme.icon("add"))
         if theme.icon("add").isNull():          # no icon font: fall back to text
-            self.plus_btn.setText("+")
             self.menu_btn.setText("☰")
 
     def _fill_columns_menu(self):
@@ -510,11 +675,176 @@ class MainWindow(QMainWindow):
             m.addAction("No bookmarks yet").setEnabled(False)
 
     # ----- tabs -----------------------------------------------------------------------
+    @property
+    def tabs(self):
+        """The active pane's tabs (most commands act on the pane you're working in)."""
+        return self.active_pane.tabs
+
     def view(self) -> FolderView:
         return self.tabs.currentWidget()
 
     def views(self) -> list[FolderView]:
-        return [self.tabs.widget(i) for i in range(self.tabs.count())]
+        return [p.tabs.widget(i) for p in self.panes for i in range(p.tabs.count())]
+
+    # ----- panes ------------------------------------------------------------------------
+    def _theme_pane(self, p):
+        c = getattr(self, "_theme", None)
+        if c is None:
+            return
+        p.strip.setStyleSheet(theme.tabstrip_qss(c))
+        p.tabs.set_close_icon(theme.icon("close", 12))
+        p.plus_btn.setIcon(theme.icon("add"))
+        if theme.icon("add").isNull():
+            p.plus_btn.setText("+")
+
+    def _add_pane(self, index=None):
+        p = Pane(self)
+        self.panes.insert(len(self.panes) if index is None else index, p)
+        self.splitter.insertWidget(self.panes.index(p), p)
+        self._theme_pane(p)
+        if self.active_pane is None:
+            self.active_pane = p
+        return p
+
+    def _place_navbar(self):
+        if len(self.panes) == 1:
+            self.panes[0].lay.insertWidget(1, self.navbar)       # tabs, navbar, files
+        else:
+            self.central_layout.insertWidget(0, self.navbar)     # navbar above the split
+        for p in self.panes:
+            p.set_active(len(self.panes) > 1 and p is self.active_pane)
+
+    def set_active_pane(self, p):
+        if p is self.active_pane or p not in self.panes:
+            return
+        self.active_pane = p
+        for q in self.panes:
+            q.set_active(len(self.panes) > 1 and q is p)
+        self._sync_location()
+
+    def _focus_changed(self, _old, new):
+        if new is None or not self.panes:
+            return
+        for p in self.panes:
+            if p.isAncestorOf(new):
+                self.set_active_pane(p)
+                return
+
+    def _pane_changed(self, p):
+        if p is self.active_pane:
+            self._sync_location()
+        elif p.tabs.count():
+            self.set_active_pane(p)
+
+    def pane_of(self, v):
+        return next((p for p in self.panes if p.tabs.indexOf(v) >= 0), None)
+
+    def split(self, orientation, move_current=False):
+        """Two panes, side by side (Horizontal) or stacked (Vertical)."""
+        self.splitter.setOrientation(orientation)
+        if len(self.panes) == 1:
+            src = self.panes[0]
+            p2 = self._add_pane()
+            if move_current and src.tabs.count() > 1:
+                self._move_tab(src, src.tabs.currentIndex(), p2)
+            else:
+                path = self.view().path
+                self.active_pane = p2
+                self.new_tab(path)
+            self._place_navbar()
+            QTimer.singleShot(0, lambda: self.splitter.setSizes([1, 1]))
+            self.set_active_pane(p2)
+        self.config.set("split", "h" if orientation == Qt.Orientation.Horizontal else "v")
+
+    def unsplit(self):
+        while len(self.panes) > 1:
+            src = self.panes[-1]
+            while src.tabs.count():
+                self._move_tab(src, 0, self.panes[0], remove_empty=False)
+            self._remove_pane(src)
+        self.config.set("split", "")
+
+    def _remove_pane(self, p):
+        self.panes.remove(p)
+        if self.active_pane is p:
+            self.active_pane = self.panes[0]
+        self._place_navbar()                 # move the navbar out before the pane goes away
+        p.setParent(None)
+        p.deleteLater()
+        if len(self.panes) == 1:
+            self.config.set("split", "")
+        self._sync_location()
+
+    def _move_tab(self, src, index, dst, remove_empty=True):
+        v = src.tabs.widget(index)
+        if v is None:
+            return
+        src.tabs.removeTab(index)
+        i = dst.tabs.insertTab(dst.tabs.count(), v, title_for(v.path))
+        dst.tabs.setTabToolTip(i, display_path(v.path))
+        dst.tabs.setCurrentIndex(i)
+        if remove_empty and src.tabs.count() == 0 and len(self.panes) > 1:
+            self._remove_pane(src)
+        self.set_active_pane(dst)
+        v.tree.setFocus()
+
+    def move_tab_to_other_pane(self):
+        if len(self.panes) < 2:
+            self.split(Qt.Orientation.Horizontal, move_current=True)
+            return
+        src = self.active_pane
+        dst = self.panes[1] if src is self.panes[0] else self.panes[0]
+        self._move_tab(src, src.tabs.currentIndex(), dst)
+
+    def focus_other_pane(self):
+        if len(self.panes) > 1:
+            other = self.panes[1] if self.active_pane is self.panes[0] else self.panes[0]
+            self.set_active_pane(other)
+            if other.tabs.currentWidget():
+                other.tabs.currentWidget().tree.setFocus()
+
+    def snap_tab(self, src, index, zone, target):
+        """A tab dropped on an edge (split) or on the other pane (move)."""
+        if src not in self.panes:
+            return
+        if zone == "move":
+            self._move_tab(src, index, target)
+            return
+        orient = Qt.Orientation.Horizontal if zone in ("left", "right") else Qt.Orientation.Vertical
+        self.splitter.setOrientation(orient)
+        new = self._add_pane(0 if zone in ("left", "top") else None)
+        if src.tabs.count() > 1:
+            self._move_tab(src, index, new)
+        else:                                 # its only tab: show the same folder in the new pane
+            v = src.tabs.widget(index)
+            self.active_pane = new
+            self.new_tab(v.path if v else None)
+        self._place_navbar()
+        QTimer.singleShot(0, lambda: self.splitter.setSizes([1, 1]))
+        self.set_active_pane(new)
+        self.config.set("split", "h" if orient == Qt.Orientation.Horizontal else "v")
+
+    def _tab_menu(self, pane, pos):
+        i = pane.tabs.bar.tabAt(pos)
+        if i < 0:
+            return
+        self.set_active_pane(pane)
+        pane.tabs.setCurrentIndex(i)
+        m = QMenu(self)
+        m.addAction("Close tab").triggered.connect(lambda: self.close_tab(i, pane))
+        others = m.addAction("Close other tabs")
+        others.setEnabled(pane.tabs.count() > 1)
+        others.triggered.connect(lambda: [self.close_tab(j, pane) for j in reversed(range(pane.tabs.count())) if j != i])
+        m.addSeparator()
+        if len(self.panes) == 1:
+            m.addAction("Open in split right").triggered.connect(lambda: self.split(Qt.Orientation.Horizontal, True))
+            m.addAction("Open in split below").triggered.connect(lambda: self.split(Qt.Orientation.Vertical, True))
+        else:
+            m.addAction("Move to other pane").triggered.connect(self.move_tab_to_other_pane)
+            m.addAction("Single pane").triggered.connect(self.unsplit)
+        m.addSeparator()
+        m.addAction("Open in new window").triggered.connect(lambda: open_new_window(self.config, [pane.tabs.widget(i).path]))
+        m.exec(pane.tabs.bar.mapToGlobal(pos))
 
     def new_tab(self, path=None, activate=True, after_current=True):
         if path is None:
@@ -540,12 +870,21 @@ class MainWindow(QMainWindow):
             v.tree.setFocus()
         return v
 
-    def close_tab(self, index):
-        if self.tabs.count() <= 1 or index < 0:
+    def close_tab(self, index, pane=None):
+        pane = pane or self.active_pane
+        if index < 0 or pane not in self.panes:
             return
-        v = self.tabs.widget(index)
+        if pane.tabs.count() <= 1:
+            if len(self.panes) > 1:          # last tab of a split pane: close the pane
+                v = pane.tabs.widget(index)
+                self.closed_tabs.append(v.path)
+                pane.tabs.removeTab(index)
+                v.deleteLater()
+                self._remove_pane(pane)
+            return
+        v = pane.tabs.widget(index)
         self.closed_tabs.append(v.path)
-        self.tabs.removeTab(index)
+        pane.tabs.removeTab(index)
         v.deleteLater()
 
     def reopen_tab(self):
@@ -561,23 +900,26 @@ class MainWindow(QMainWindow):
             self.tabs.setCurrentIndex((self.tabs.currentIndex() + delta) % n)
 
     def eventFilter(self, obj, ev):
-        if obj is self.tabstrip and ev.type() == QEvent.Type.MouseButtonDblClick:
-            self.new_tab()
-            return True
-        if (obj is self.tabs.tabBar() and ev.type() == QEvent.Type.MouseButtonRelease
-                and ev.button() == Qt.MouseButton.MiddleButton):
-            i = obj.tabAt(ev.position().toPoint())
-            if i >= 0:
-                self.close_tab(i)
+        for p in self.panes:
+            if obj is p.strip and ev.type() == QEvent.Type.MouseButtonDblClick:
+                self.set_active_pane(p)
+                self.new_tab()
                 return True
+            if (obj is p.tabs.bar and ev.type() == QEvent.Type.MouseButtonRelease
+                    and ev.button() == Qt.MouseButton.MiddleButton):
+                i = obj.tabAt(ev.position().toPoint())
+                if i >= 0:
+                    self.close_tab(i, p)
+                    return True
         return super().eventFilter(obj, ev)
 
     # ----- keeping the chrome in sync -------------------------------------------------
     def _on_view_path(self, v):
-        i = self.tabs.indexOf(v)
-        if i >= 0:
-            self.tabs.setTabText(i, title_for(v.path))
-            self.tabs.setTabToolTip(i, display_path(v.path))
+        p = self.pane_of(v)
+        if p is not None:
+            i = p.tabs.indexOf(v)
+            p.tabs.setTabText(i, title_for(v.path))
+            p.tabs.setTabToolTip(i, display_path(v.path))
         if v is self.view():
             self._sync_location()
 
@@ -671,7 +1013,7 @@ class MainWindow(QMainWindow):
                 v.apply_settings()
 
     FEATURE_KEYS = ("show_folder_icons", "show_tags", "preview_images", "preview_media", "preview_text",
-                    "text_syntax_colors", "preview_archives", "sidebar_places", "sidebar_cloud",
+                    "text_syntax_colors", "preview_archives", "preview_epub", "sidebar_places", "sidebar_cloud",
                     "sidebar_tags", "sidebar_network")
 
     def _system_scheme_changed(self, *_):
@@ -1071,6 +1413,8 @@ class MainWindow(QMainWindow):
     # ----- Win+E and background mode -------------------------------------------------------
     def apply_background_switches(self):
         """Win+E hook and tray/background mode follow their Settings switches."""
+        if not self.primary:
+            return                       # the primary window hosts these
         from .hotkey import WinEHook, set_start_with_windows, starts_with_windows
         if not hasattr(self, "win_e_hook"):
             self.win_e_hook = WinEHook(self)
@@ -1102,9 +1446,16 @@ class MainWindow(QMainWindow):
             self.tray = None
 
     def _win_e_pressed(self):
-        if self.isVisible() and not self.isMinimized():
-            self.new_tab()
-        self.bring_to_front()
+        visible = [w for w in WINDOWS if w.isVisible() and not w.isMinimized()]
+        if self.config.get("win_e_opens") == "tab":
+            target = next((w for w in reversed(LAST_ACTIVE) if w in visible), None) or self
+            if target.isVisible() and not target.isMinimized():
+                target.new_tab()
+            target.bring_to_front()
+        elif not visible:
+            self.bring_to_front()            # nothing on screen: show the (hidden) main window
+        else:
+            open_new_window(self.config)
 
     def bring_to_front(self):
         if self.isMinimized():
@@ -1117,6 +1468,9 @@ class MainWindow(QMainWindow):
 
     def quit_for_real(self):
         self._really_quit = True
+        for w in list(WINDOWS):
+            if w is not self:
+                w.close()
         self.close()
 
     def apply_feature_switches(self):
@@ -1127,7 +1481,8 @@ class MainWindow(QMainWindow):
         icon_cache().forget_folder_icons()
         _tags.ENABLED = bool(c.get("show_tags"))
         self.inspector.prefs = {k: bool(c.get(k)) for k in (
-            "preview_images", "preview_media", "preview_text", "text_syntax_colors", "preview_archives")}
+            "preview_images", "preview_media", "preview_text", "text_syntax_colors", "preview_archives",
+            "preview_epub")}
         self.sidebar.rebuild()
         for v in self.views():
             v.tree.viewport().update()
@@ -1179,11 +1534,6 @@ class MainWindow(QMainWindow):
     def open_settings(self):
         dialogs.SettingsDialog(self.config, self).exec()
 
-    def changeEvent(self, ev):
-        super().changeEvent(ev)
-        if ev.type() == QEvent.Type.WindowStateChange and self.isMinimized():
-            self.inspector.media.pause()         # no decoding while nobody can see it
-
     def showEvent(self, ev):
         super().showEvent(ev)
         if not self._docks_sized:              # first run: sensible panel widths (needs a shown window)
@@ -1191,7 +1541,31 @@ class MainWindow(QMainWindow):
             self.resizeDocks([self.side_dock, self.insp_dock], [230, 320], Qt.Orientation.Horizontal)
 
     # ----- shutdown --------------------------------------------------------------------------
+    def changeEvent(self, ev):
+        super().changeEvent(ev)
+        if ev.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
+            if self in LAST_ACTIVE:
+                LAST_ACTIVE.remove(self)
+            LAST_ACTIVE.append(self)
+        if ev.type() == QEvent.Type.WindowStateChange and self.isMinimized():
+            self.inspector.media.pause()
+
     def closeEvent(self, ev):
+        others = [w for w in WINDOWS if w is not self and w.isVisible()]
+        if not self.primary:
+            # an extra window: just close it; the last one standing ends the app (unless in tray)
+            if self in WINDOWS:
+                WINDOWS.remove(self)
+            self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+            super().closeEvent(ev)
+            if not others and not self.config.get("run_in_background") and WINDOWS:
+                WINDOWS[0].quit_for_real()
+            return
+        if others and not getattr(self, "_really_quit", False):
+            self._save_session()             # the primary window hosts Win+E / tray: hide it
+            self.hide()
+            ev.ignore()
+            return
         if self.config.get("run_in_background") and not getattr(self, "_really_quit", False):
             self.hide()                    # keep running in the tray (Win+E, quick reopen)
             ev.ignore()
@@ -1211,8 +1585,11 @@ class MainWindow(QMainWindow):
         QApplication.instance().quit()
 
     def _save_session(self):
-        self.config.data["session_tabs"] = [v.path for v in self.views()]
-        self.config.data["session_current"] = self.tabs.currentIndex()
+        p0 = self.panes[0]
+        self.config.data["session_tabs"] = [p0.tabs.widget(i).path for i in range(p0.tabs.count())]
+        self.config.data["session_current"] = p0.tabs.currentIndex()
+        self.config.data["session_tabs2"] = ([self.panes[1].tabs.widget(i).path for i in range(self.panes[1].tabs.count())]
+                                             if len(self.panes) > 1 else [])
         self.config.data["window_geometry"] = bytes(self.saveGeometry().toHex().data()).decode()
         self.config.data["window_state"] = bytes(self.saveState().toHex().data()).decode()
         self.config.save()
@@ -1242,7 +1619,7 @@ def main():
     win = MainWindow(config, paths)
     if config.get("single_instance"):
         server = integration.InstanceServer(win)
-        server.received.connect(win.open_external)
+        server.received.connect(route_external)
     for a in args:                        # a file on the command line: open its folder, select it
         if os.path.isfile(a):
             win.open_external([os.path.abspath(a)])
