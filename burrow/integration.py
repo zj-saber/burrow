@@ -104,16 +104,66 @@ def set_default(enable: bool) -> str | None:
                 except OSError:
                     pass
                 _delete_tree(base + "\\" + VERB)
-        win_e = rf"Software\Classes\CLSID\{THIS_PC_CLSID}\shell\opennewwindow\command"
+        _notify_assoc_changed()
+        return None
+    except OSError as ex:
+        return str(ex)
+
+
+def is_win_e() -> bool:
+    if not WIN:
+        return False
+    winreg = _reg()
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            rf"Software\Classes\CLSID\{THIS_PC_CLSID}\shell\opennewwindow\command") as k:
+            return "burrow" in winreg.QueryValueEx(k, "")[0].lower()
+    except OSError:
+        return False
+
+
+def set_win_e(enable: bool) -> str | None:
+    """Win+E opens Burrow (the same per-user override the Files app uses). Separate from
+    opening folders in Burrow."""
+    if not WIN:
+        return "Only available on Windows."
+    try:
+        key = rf"Software\Classes\CLSID\{THIS_PC_CLSID}\shell\opennewwindow\command"
         if enable:
-            _set_value(win_e, "", cmd)
-            _set_value(win_e, "DelegateExecute", "")
+            _set_value(key, "", launch_command())
+            _set_value(key, "DelegateExecute", "")
         else:
             _delete_tree(rf"Software\Classes\CLSID\{THIS_PC_CLSID}")
         _notify_assoc_changed()
         return None
     except OSError as ex:
         return str(ex)
+
+
+# ----- Explorer Quick Access ------------------------------------------------------------------
+QUICK_ACCESS = "shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}"
+
+
+def _ps_quote(s: str) -> str:
+    return "'" + s.replace("'", "''") + "'"
+
+
+def _run_ps(script: str):
+    import subprocess
+    subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+                   capture_output=True, timeout=20, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
+def pin_to_quick_access(path: str):
+    """Pin a folder in Explorer's Quick Access (no-op if already pinned). Slow-ish: run off-thread."""
+    _run_ps(f"$f=(New-Object -ComObject Shell.Application).Namespace({_ps_quote(path)}); "
+            f"if ($f) {{ $f.Self.InvokeVerb('pintohome') }}")
+
+
+def unpin_from_quick_access(path: str):
+    _run_ps(f"$qa=(New-Object -ComObject Shell.Application).Namespace('{QUICK_ACCESS}'); "
+            f"$qa.Items() | Where-Object {{ $_.Path -eq {_ps_quote(path)} }} | "
+            f"ForEach-Object {{ $_.InvokeVerb('unpinfromhome') }}")
 
 
 # ----- single instance -----------------------------------------------------------------------

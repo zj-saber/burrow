@@ -115,12 +115,16 @@ class MainWindow(QMainWindow):
         self.inspector_timer.setSingleShot(True)
         self.inspector_timer.setInterval(120)
         self.inspector_timer.timeout.connect(self._update_inspector)
+        self._feature_key = tuple(config.get(k) for k in self.FEATURE_KEYS)
+        self.apply_feature_switches()
 
         config.settingsChanged.connect(self._settings_changed)
         config.viewChanged.connect(lambda _src: self._sync_preset_combo())
         config.presetsChanged.connect(self._sync_preset_combo)
         config.bookmarksChanged.connect(self._sync_location)
         tags.store().changed.connect(self._tags_changed)
+        config.bookmarkAdded.connect(lambda p: self._mirror_bookmark(p, True))
+        config.bookmarkRemoved.connect(lambda p: self._mirror_bookmark(p, False))
 
         if config.get("window_geometry"):
             self.restoreGeometry(QByteArray.fromHex(config.get("window_geometry").encode()))
@@ -172,7 +176,8 @@ class MainWindow(QMainWindow):
         self.act_network = A("Network", lambda: self.view().navigate(NETWORK))
         self.act_map_drive = A("Map network drive…", self.map_drive)
         self.act_unmap_drive = A("Disconnect network drive…", self.disconnect_drive)
-        self.act_default_fm = A("Use Burrow as default file manager", self.toggle_default_fm, checkable=True)
+        self.act_default_fm = A("Open folders in Burrow", self.toggle_default_fm, checkable=True)
+        self.act_win_e = A("Open Burrow with Win+E", self.toggle_win_e, checkable=True)
         self.act_default_fm.setToolTip("When on, folders opened anywhere in Windows and Win+E open in Burrow. Off by default.")
         self.act_refresh = A("Refresh", self.refresh_view, "F5", icon=S(SP.SP_BrowserReload), tip="Refresh (F5)")
         self.act_address = A("Edit address", self.focus_address, ["Ctrl+L", "Alt+D", "F4"])
@@ -364,9 +369,10 @@ class MainWindow(QMainWindow):
         self.bookmarks_menu = mb.addMenu("&Bookmarks")
         self.bookmarks_menu.aboutToShow.connect(self._fill_bookmarks_menu)
         t = mb.addMenu("&Tools")
-        t.aboutToShow.connect(lambda: self.act_default_fm.setChecked(integration.is_default()))
+        t.aboutToShow.connect(lambda: (self.act_default_fm.setChecked(integration.is_default()),
+                                       self.act_win_e.setChecked(integration.is_win_e())))
         for a in (self.act_terminal, self.act_explorer, self.act_properties, None,
-                  self.act_map_drive, self.act_unmap_drive, None, self.act_default_fm, None, self.act_settings):
+                  self.act_map_drive, self.act_unmap_drive, None, self.act_default_fm, self.act_win_e, None, self.act_settings):
             t.addSeparator() if a is None else t.addAction(a)
         v.addAction(self.act_menubar)
 
@@ -390,7 +396,8 @@ class MainWindow(QMainWindow):
             self.inspector.media.unload()       # inspector closed: stop and free the player
 
     def _seek_pressed(self, direction: int, big: bool) -> bool:
-        if not self.insp_dock.isVisible() or not self.inspector.media.is_active():
+        if not self.config.get("media_arrow_seek") or not self.insp_dock.isVisible() \
+                or not self.inspector.media.is_active():
             return False
         return self.inspector.media.seek_by(direction * (30000 if big else 5000))
 
@@ -647,11 +654,19 @@ class MainWindow(QMainWindow):
         self.act_hidden.setChecked(self.config.get("show_hidden"))
         if (self.config.get("theme"), theme.resolve(self.config.get("theme")), self.config.get("palette")) != self._theme_key:
             self.apply_theme()
+        feats = tuple(self.config.get(k) for k in self.FEATURE_KEYS)
+        if feats != getattr(self, "_feature_key", None):
+            self._feature_key = feats
+            self.apply_feature_switches()
         key = (self.config.get("show_hidden"), self.config.get("date_format"), self.config.get("everything_sizes"))
         if key != getattr(self, "_listing_key", None):     # only re-list when it matters
             self._listing_key = key
             for v in self.views():
                 v.apply_settings()
+
+    FEATURE_KEYS = ("show_folder_icons", "show_tags", "preview_images", "preview_media", "preview_text",
+                    "text_syntax_colors", "preview_archives", "sidebar_places", "sidebar_cloud",
+                    "sidebar_tags", "sidebar_network")
 
     def _system_scheme_changed(self, *_):
         if self.config.get("theme") == "system":
@@ -738,7 +753,8 @@ class MainWindow(QMainWindow):
             plain = [e for e in entries if not e.is_drive]
             if plain:
                 m.addSeparator()
-                self._add_tag_menu(m, [e.path for e in plain])
+                if tags.ENABLED:
+                    self._add_tag_menu(m, [e.path for e in plain])
                 folders = [e.path for e in plain if e.is_dir and not places.is_remote(e.path)]
                 if folders:
                     self._add_color_menu(m, folders)
@@ -1042,12 +1058,41 @@ class MainWindow(QMainWindow):
         self.raise_()
         self.activateWindow()
 
+    def toggle_win_e(self, on: bool):
+        err = integration.set_win_e(on)
+        if err:
+            QMessageBox.warning(self, "Win+E", f"Couldn't change the setting: {err}")
+        self.act_win_e.setChecked(integration.is_win_e())
+        self.statusBar().showMessage("Win+E now opens Burrow" if integration.is_win_e()
+                                     else "Win+E opens Explorer again", 5000)
+
+    def apply_feature_switches(self):
+        """Push the Settings feature switches into the parts that use them."""
+        from . import tags as _tags
+        c = self.config
+        icon_cache().show_custom = bool(c.get("show_folder_icons"))
+        icon_cache().forget_folder_icons()
+        _tags.ENABLED = bool(c.get("show_tags"))
+        self.inspector.prefs = {k: bool(c.get(k)) for k in (
+            "preview_images", "preview_media", "preview_text", "text_syntax_colors", "preview_archives")}
+        self.sidebar.rebuild()
+        for v in self.views():
+            v.tree.viewport().update()
+        self.inspector_timer.start()
+
+    def _mirror_bookmark(self, path: str, added: bool):
+        """Bookmarks are pinned/unpinned in Explorer's Quick Access too (Settings switch)."""
+        if not self.config.get("quick_access_sync") or places.is_special(path):
+            return
+        fn = integration.pin_to_quick_access if added else integration.unpin_from_quick_access
+        places.run_async(lambda: fn(path), lambda _res: None)
+
     def toggle_default_fm(self, on: bool):
         """Turn 'Burrow opens folders and Win+E' on or off (per user; off unless you turn it on)."""
         if on and QMessageBox.question(
                 self, "Default file manager",
                 "Open folders and drives in Burrow everywhere in Windows (desktop, Explorer, Run, "
-                "shortcuts) and use it for Win+E?\n\nYou can turn this off again from the same menu "
+                "shortcuts)?\n\nYou can turn this off again from the same menu "
                 "or in Settings.") != QMessageBox.StandardButton.Yes:
             self.act_default_fm.setChecked(False)
             return
@@ -1057,7 +1102,7 @@ class MainWindow(QMainWindow):
         state = integration.is_default()
         self.act_default_fm.setChecked(state)
         self.statusBar().showMessage(
-            "Burrow is now the default file manager" if state else "Folders open in Explorer again", 5000)
+            "Folders now open in Burrow" if state else "Folders open in Explorer again", 5000)
 
     def map_drive(self):
         places.map_drive_dialog(int(self.winId()))
@@ -1124,15 +1169,16 @@ def main():
         app.setWindowIcon(QIcon(icon_path))
     args = [a for a in sys.argv[1:] if a and not a.startswith("-")]
     # Already running? Hand over the paths (opened as tabs there) and quit.
-    if integration.send_to_running([os.path.abspath(a) for a in args]):
-        return 0
     config = Config()
+    if config.get("single_instance") and integration.send_to_running([os.path.abspath(a) for a in args]):
+        return 0
     theme.apply(app, config.get("theme"), config.get("palette"))
     fileops.cleanup_temp()
     paths = [normalize_path(a) for a in args if os.path.isdir(a)]
     win = MainWindow(config, paths)
-    server = integration.InstanceServer(win)
-    server.received.connect(win.open_external)
+    if config.get("single_instance"):
+        server = integration.InstanceServer(win)
+        server.received.connect(win.open_external)
     for a in args:                        # a file on the command line: open its folder, select it
         if os.path.isfile(a):
             win.open_external([os.path.abspath(a)])

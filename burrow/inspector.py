@@ -103,6 +103,7 @@ class Inspector(QWidget):
 
     # ----- helpers -------------------------------------------------------------
     use_everything = True
+    prefs: dict = {}       # Settings switches, set by the window
     _hl = None
     _shown = None
 
@@ -305,7 +306,15 @@ class Inspector(QWidget):
         if remote and (e.size or 0) > 512 * 1024:
             self._set_note("Large file on a network location: no automatic preview.")
             return
-        if e.ext in raw.RAW_EXTS or (e.ext in raw.SHELL_IMAGE_EXTS and e.ext not in self._img_exts):
+        pref = lambda k: self.prefs.get(k, True)   # noqa: E731
+        if not pref("preview_images") and (e.ext in raw.RAW_EXTS or e.ext in raw.SHELL_IMAGE_EXTS
+                                         or e.ext == "pdf" or e.ext in self._img_exts):
+            pass
+        elif not pref("preview_media") and (e.ext in VIDEO_EXTS or e.ext in AUDIO_EXTS or e.ext in raw.BRAW_EXTS):
+            pass
+        elif not pref("preview_archives") and (e.ext in archive.ARCHIVE_EXTS or e.path.lower().endswith(archive.TAR_SUFFIXES)):
+            pass
+        elif e.ext in raw.RAW_EXTS or (e.ext in raw.SHELL_IMAGE_EXTS and e.ext not in self._img_exts):
             self._preview_raw(e)          # RAW, or a photo format only Windows can decode (HEIC...)
         elif e.ext in raw.BRAW_EXTS:
             self._preview_braw(e)
@@ -317,7 +326,7 @@ class Inspector(QWidget):
             self._preview_archive(e)
         elif e.ext in VIDEO_EXTS or e.ext in AUDIO_EXTS:
             self._preview_media(e)
-        elif e.ext in TEXT_EXTS or e.ext not in BINARY_EXTS:
+        elif pref("preview_text") and (e.ext in TEXT_EXTS or e.ext not in BINARY_EXTS):
             # any size: only the first 256 KB is read, and binary content is detected
             self._preview_text(e)
 
@@ -528,5 +537,6 @@ class Inspector(QWidget):
             self._hl.setDocument(None)
         from .highlight import PreviewHighlighter
         from . import theme
-        self._hl = PreviewHighlighter(self.text.document(), e.ext, theme.colors())
+        self._hl = PreviewHighlighter(self.text.document(), e.ext, theme.colors()) \
+            if self.prefs.get("text_syntax_colors", True) else None
         self._show_text(True)

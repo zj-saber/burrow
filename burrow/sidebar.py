@@ -157,8 +157,9 @@ class Sidebar(QTreeWidget):
         if not self.config.bookmarks():
             hint = QTreeWidgetItem(bm, ["Ctrl+D bookmarks a folder"])
             hint.setFlags(Qt.ItemFlag.NoItemFlags)
-        sect = self._section("Places", key="places")
-        for label, loc in PLACES:
+        cfg = self.config
+        sect = self._section("Places", key="places") if cfg.get("sidebar_places") else None
+        for label, loc in (PLACES if sect is not None else []):
             p = QStandardPaths.writableLocation(loc)
             if p and os.path.isdir(p):
                 self._item(sect, label, os.path.normpath(p), "place", icons.folder_icon(p))
@@ -168,28 +169,30 @@ class Sidebar(QTreeWidget):
         cloud = [d for d in entries if d.kind == "cloud"]
         local = [d for d in entries if d.kind not in ("cloud", "network")]
         network = [d for d in entries if d.kind == "network"]
-        if cloud:
+        if cloud and cfg.get("sidebar_cloud"):
             sect = self._section("Cloud", key="cloud")
             for d in cloud:
                 self._item(sect, d.name, d.path, "cloud", icons.icon(d), f"{d.name}  —  {d.path}")
         used = [t for t in tags.TAGS if tags.store().count(t[0])]
-        sect = self._section("Tags", key="tags")
-        for tid, name, color in used:
+        show_tags = cfg.get("sidebar_tags") and tags.ENABLED
+        sect = self._section("Tags", key="tags") if show_tags else None
+        for tid, name, color in (used if show_tags else []):
             self._item(sect, f"{name}  ·  {tags.store().count(tid)}", tags.tag_location(tid), "tag",
                        tags.color_icon(color), f"Everything tagged {name}")
-        if not used:
+        if show_tags and not used:
             hint = QTreeWidgetItem(sect, ["Right-click ▸ Tags to tag items"])
             hint.setFlags(Qt.ItemFlag.NoItemFlags)
         pc = self._section("This PC", DRIVES, key="pc")
         for d in local:
             self._item(pc, d.name, d.path, "drive", icons.icon(d), f"{d.path}  —  {d.note}")
-        net = self._section("Network", NETWORK, icons.network, key="network")
-        net.setData(0, KIND_ROLE, "network-root")
-        for d in network:
+        net = self._section("Network", NETWORK, icons.network, key="network") if cfg.get("sidebar_network") else None
+        if net is not None:
+            net.setData(0, KIND_ROLE, "network-root")
+        for d in (network if net is not None else []):
             it = self._item(net, d.name, d.path, "netdrive", icons.network, f"{d.path}  —  {d.note}")
             if d.note.startswith("Disconnected"):
                 it.setForeground(0, QColor(theme.colors()["dim"]))
-        for s in places.RECENT_SERVERS:
+        for s in (places.RECENT_SERVERS if net is not None else []):
             self._item(net, s[2:], s, "server", icons.network, s)
         collapsed = set(self.config.get("sidebar_collapsed"))
         for i in range(self.topLevelItemCount()):

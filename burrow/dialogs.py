@@ -129,17 +129,122 @@ class ManagePresetsDialog(QDialog):
 
 # ----- settings -----------------------------------------------------------------
 class SettingsDialog(QDialog):
+    """Settings in four tabs. Every feature has its own on/off switch."""
+
     def __init__(self, config: Config, parent=None):
         super().__init__(parent)
+        from PySide6.QtWidgets import QScrollArea, QTabWidget, QWidget
+        from . import everything, integration
+        from . import theme as _theme
         self.config = config
         self.setWindowTitle("Settings")
-        self.setMinimumWidth(560)
+        self.setMinimumSize(620, 560)
+        self._checks: dict[str, QCheckBox] = {}
 
-        # TeraCopy
+        def check(key, text, tip=""):
+            cb = QCheckBox(text)
+            cb.setChecked(bool(config.get(key)))
+            if tip:
+                cb.setToolTip(tip)
+            self._checks[key] = cb
+            return cb
+
+        def note(text):
+            lbl = QLabel(text)
+            lbl.setWordWrap(True)
+            lbl.setProperty("role", "key")
+            return lbl
+
+        def page(*groups):
+            w = QWidget()
+            lay = QVBoxLayout(w)
+            for g in groups:
+                lay.addWidget(g)
+            lay.addStretch(1)
+            sa = QScrollArea()
+            sa.setWidgetResizable(True)
+            sa.setFrameShape(QScrollArea.Shape.NoFrame)
+            sa.setWidget(w)
+            return sa
+
+        # ----- General -------------------------------------------------------------
+        look = QGroupBox("Look")
+        f = QFormLayout(look)
+        self.theme = QComboBox()
+        for label, key in (("Match Windows", "system"), ("Light", "light"), ("Dark", "dark")):
+            self.theme.addItem(label, key)
+        self.theme.setCurrentIndex(max(self.theme.findData(config.get("theme")), 0))
+        self.palette = QComboBox()
+        for key, label in _theme.PALETTE_NAMES.items():
+            self.palette.addItem(label, key)
+        self.palette.setCurrentIndex(max(self.palette.findData(config.get("palette")), 0))
+        self.date_fmt = QComboBox()
+        now = datetime.now()
+        for fmt in DATE_FORMATS:
+            self.date_fmt.addItem(now.strftime(fmt), fmt)
+        self.date_fmt.setCurrentIndex(max(self.date_fmt.findData(config.get("date_format")), 0))
+        f.addRow("Theme:", self.theme)
+        f.addRow("Colors:", self.palette)
+        f.addRow("Date format:", self.date_fmt)
+
+        behave = QGroupBox("Behavior")
+        f = QFormLayout(behave)
+        self.new_tab = QLineEdit(config.get("new_tab_path"))
+        self.new_tab.setPlaceholderText("Home folder")
+        nt_browse = QPushButton("Browse…")
+        nt_browse.clicked.connect(self._browse_new_tab)
+        nt_row = QHBoxLayout()
+        nt_row.addWidget(self.new_tab, 1)
+        nt_row.addWidget(nt_browse)
+        f.addRow("New tabs open:", nt_row)
+        f.addRow(check("confirm_delete", "Ask before moving items to the Recycle Bin"))
+        f.addRow(check("single_instance", "Open new windows as tabs in the running Burrow",
+                       "When off, every launch opens its own window (takes effect next start)."))
+
+        # ----- Preview -------------------------------------------------------------
+        prev = QGroupBox("Inspector previews")
+        f = QFormLayout(prev)
+        f.addRow(check("preview_images", "Photos, RAW photos and PDFs (zoomable)"))
+        f.addRow(check("preview_media", "Video and audio player"))
+        f.addRow(check("media_arrow_seek", "← / → seek the previewed video or song (Shift: 30 s)"))
+        f.addRow(check("preview_text", "Text files (YAML, JSON, code, logs…)"))
+        f.addRow(check("text_syntax_colors", "Syntax colors in text previews"))
+        f.addRow(check("preview_archives", "Archive contents (zip, rar, 7z…)"))
+        f.addRow(note("Turned-off previews still show the file's details."))
+
+        # ----- Sidebar & list ------------------------------------------------------
+        lst = QGroupBox("File list")
+        f = QFormLayout(lst)
+        f.addRow(check("show_hidden", "Show hidden and system files"))
+        f.addRow(check("show_folder_icons", "Show Explorer folder colors and custom folder icons"))
+        f.addRow(check("show_tags", "Color tags (dots, Tags menu and sidebar section)"))
+        side = QGroupBox("Sidebar sections")
+        f = QFormLayout(side)
+        f.addRow(check("sidebar_places", "Places (Home, Desktop, Documents…)"))
+        f.addRow(check("sidebar_cloud", "Cloud (OneDrive, iCloud…)"))
+        f.addRow(check("sidebar_tags", "Tags"))
+        f.addRow(check("sidebar_network", "Network"))
+        f.addRow(note("Bookmarks and This PC are always shown. Any section can also be collapsed by clicking its heading."))
+
+        # ----- Integrations --------------------------------------------------------
+        win = QGroupBox("Windows")
+        f = QFormLayout(win)
+        self.default_fm = QCheckBox("Open folders and drives in Burrow")
+        self.default_fm.setChecked(integration.is_default())
+        self.win_e = QCheckBox("Open Burrow with Win+E")
+        self.win_e.setChecked(integration.is_win_e())
+        self._default_was, self._win_e_was = self.default_fm.isChecked(), self.win_e.isChecked()
+        f.addRow(self.default_fm)
+        f.addRow(note("Desktop, Explorer, the Run box, shortcuts and apps that open a folder go to Burrow, as tabs."))
+        f.addRow(self.win_e)
+        f.addRow(check("quick_access_sync", "Mirror bookmarks to Explorer Quick Access",
+                       "Adding or removing a bookmark pins or unpins the folder in Explorer."))
+        f.addRow(note("Folder colors set in Burrow are always written so Explorer shows them too. "
+                      "The Open/Save dialogs inside other apps can't be replaced."))
+
         tc_box = QGroupBox("TeraCopy")
         tc = QFormLayout(tc_box)
-        self.use_tc = QCheckBox("Use TeraCopy for copy and move (paste, drag and drop, Copy to / Move to)")
-        self.use_tc.setChecked(config.get("use_teracopy"))
+        self.use_tc = check("use_teracopy", "Use TeraCopy for copy and move (paste, drag and drop, Copy to / Move to)")
         self.tc_path = QLineEdit(config.get("teracopy_path"))
         self.tc_path.setPlaceholderText("Detect automatically")
         self.tc_path.textChanged.connect(self._update_tc_status)
@@ -153,86 +258,30 @@ class SettingsDialog(QDialog):
         path_row.addWidget(detect)
         self.tc_status = QLabel()
         self.tc_status.setWordWrap(True)
-        self.tc_close = QCheckBox("Close TeraCopy when the transfer finishes")
-        self.tc_close.setChecked(config.get("teracopy_close"))
         tc.addRow(self.use_tc)
         tc.addRow("TeraCopy.exe:", path_row)
         tc.addRow("", self.tc_status)
-        tc.addRow(self.tc_close)
-        note = QLabel("Copying items into the folder they're already in (making “- Copy” duplicates) "
-                      "always uses the built-in copier. Edit ▸ Paste with built-in copier skips TeraCopy.")
-        note.setWordWrap(True)
-        tc.addRow(note)
+        tc.addRow(check("teracopy_close", "Close TeraCopy when the transfer finishes"))
+        tc.addRow(note("Duplicating items in their own folder always uses the built-in copier."))
 
-        # Everything (voidtools)
         ev_box = QGroupBox("Everything (voidtools)")
         ev = QFormLayout(ev_box)
-        self.ev_sizes = QCheckBox("Show folder sizes from Everything")
-        self.ev_sizes.setChecked(config.get("everything_sizes"))
-        from . import everything
-        running = everything.is_running()
-        ev_status = QLabel(
-            "✓ Everything is running. Folder sizes need “Index folder size” turned on in Everything "
-            "(Tools ▸ Options ▸ Indexes)." if running else
-            "⚠ Everything isn't running. Start it (voidtools.com) and folder sizes appear automatically.")
-        ev_status.setWordWrap(True)
-        ev.addRow(self.ev_sizes)
-        ev.addRow(ev_status)
+        ev.addRow(check("everything_sizes", "Show folder sizes from Everything"))
+        ev.addRow(note("✓ Everything is running. Folder sizes need “Index folder size” in Everything's options."
+                       if everything.is_running() else
+                       "⚠ Everything isn't running. Start it and folder sizes appear automatically."))
 
-        # General
-        gen_box = QGroupBox("General")
-        gen = QFormLayout(gen_box)
-        self.show_hidden = QCheckBox("Show hidden and system files")
-        self.show_hidden.setChecked(config.get("show_hidden"))
-        self.confirm = QCheckBox("Ask before moving items to the Recycle Bin")
-        self.confirm.setChecked(config.get("confirm_delete"))
-        self.new_tab = QLineEdit(config.get("new_tab_path"))
-        self.new_tab.setPlaceholderText("Home folder")
-        nt_browse = QPushButton("Browse…")
-        nt_browse.clicked.connect(self._browse_new_tab)
-        nt_row = QHBoxLayout()
-        nt_row.addWidget(self.new_tab, 1)
-        nt_row.addWidget(nt_browse)
-        self.date_fmt = QComboBox()
-        now = datetime.now()
-        for f in DATE_FORMATS:
-            self.date_fmt.addItem(now.strftime(f), f)
-        idx = self.date_fmt.findData(config.get("date_format"))
-        self.date_fmt.setCurrentIndex(max(idx, 0))
-        self.theme = QComboBox()
-        for label, key in (("Match Windows", "system"), ("Light", "light"), ("Dark", "dark")):
-            self.theme.addItem(label, key)
-        self.theme.setCurrentIndex(max(self.theme.findData(config.get("theme")), 0))
-        gen.addRow("Theme:", self.theme)
-        from . import theme as _theme
-        self.palette = QComboBox()
-        for key, label in _theme.PALETTE_NAMES.items():
-            self.palette.addItem(label, key)
-        self.palette.setCurrentIndex(max(self.palette.findData(config.get("palette")), 0))
-        gen.addRow("Colors:", self.palette)
-        gen.addRow(self.show_hidden)
-        gen.addRow(self.confirm)
-        from . import integration
-        self.default_fm = QCheckBox("Use Burrow as the default file manager")
-        self.default_fm.setChecked(integration.is_default())
-        self._default_was = self.default_fm.isChecked()
-        fm_note = QLabel("Folders and drives you open anywhere in Windows (desktop, Explorer, Run, shortcuts) "
-                         "and Win+E open in Burrow, as tabs in the open window. The Open/Save dialogs inside "
-                         "other apps and browsers can't be replaced; Windows draws those inside each app.")
-        fm_note.setWordWrap(True)
-        fm_note.setProperty("role", "key")
-        gen.addRow(self.default_fm)
-        gen.addRow(fm_note)
-        gen.addRow("New tabs open:", nt_row)
-        gen.addRow("Date format:", self.date_fmt)
+        tabs = QTabWidget()
+        tabs.addTab(page(look, behave), "General")
+        tabs.addTab(page(prev), "Preview")
+        tabs.addTab(page(lst, side), "Sidebar && list")
+        tabs.addTab(page(win, tc_box, ev_box), "Integrations")
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self._save)
         buttons.rejected.connect(self.reject)
         lay = QVBoxLayout(self)
-        lay.addWidget(tc_box)
-        lay.addWidget(ev_box)
-        lay.addWidget(gen_box)
+        lay.addWidget(tabs, 1)
         lay.addWidget(buttons)
         self._update_tc_status()
 
@@ -264,21 +313,20 @@ class SettingsDialog(QDialog):
             self.new_tab.setText(os.path.normpath(p))
 
     def _save(self):
-        if self.default_fm.isChecked() != self._default_was:
-            from . import integration
-            err = integration.set_default(self.default_fm.isChecked())
-            if err:
-                QMessageBox.warning(self, "Default file manager", f"Couldn't change the setting: {err}")
-        self.config.update({
-            "use_teracopy": self.use_tc.isChecked(),
+        from . import integration
+        for box, was, fn, label in ((self.default_fm, self._default_was, integration.set_default, "Open folders in Burrow"),
+                                    (self.win_e, self._win_e_was, integration.set_win_e, "Win+E")):
+            if box.isChecked() != was:
+                err = fn(box.isChecked())
+                if err:
+                    QMessageBox.warning(self, label, f"Couldn't change the setting: {err}")
+        values = {key: cb.isChecked() for key, cb in self._checks.items()}
+        values.update({
             "teracopy_path": self.tc_path.text().strip(),
-            "teracopy_close": self.tc_close.isChecked(),
-            "show_hidden": self.show_hidden.isChecked(),
-            "confirm_delete": self.confirm.isChecked(),
             "new_tab_path": self.new_tab.text().strip(),
             "date_format": self.date_fmt.currentData(),
             "theme": self.theme.currentData(),
             "palette": self.palette.currentData(),
-            "everything_sizes": self.ev_sizes.isChecked(),
         })
+        self.config.update(values)
         self.accept()

@@ -148,13 +148,15 @@ class IconCache:
             self._icons[key] = ic
         return ic
 
+    show_custom = True          # Settings: show Explorer folder colors/icons
+
     def folder_icon(self, path: str, attrs: int | None = None):
         """Explorer's icon for a folder, including custom colors set through desktop.ini
         (FolderPainter, Folcolor, Folder Colorizer...). Windows only reads desktop.ini on
         folders marked Read-only or System, so every other folder gets the plain icon without
         any disk access. Looked up once per folder (lazily, when a row is drawn) and cached;
         network folders are skipped so drawing never waits on a server."""
-        if attrs is not None and not attrs & (ATTR_READONLY | ATTR_SYSTEM):
+        if not self.show_custom or (attrs is not None and not attrs & (ATTR_READONLY | ATTR_SYSTEM)):
             return self.folder
         key = ("dir", os.path.normcase(path))
         ic = self._icons.get(key)

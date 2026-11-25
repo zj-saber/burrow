@@ -193,6 +193,41 @@ def _set_attrs(path: str, attrs: int):
         ctypes.windll.kernel32.SetFileAttributesW(path, attrs or FILE_ATTRIBUTE_NORMAL)
 
 
+def _api_set_icon(folder: str, icon_file: str, index: int) -> bool:
+    """Set a folder's icon with SHGetSetFolderCustomSettings, the call Windows' own folder
+    Properties dialog uses: it updates desktop.ini and attributes and makes Explorer refresh."""
+    if not WIN:
+        return False
+    from ctypes import wintypes
+
+    class SHFOLDERCUSTOMSETTINGS(ctypes.Structure):
+        _fields_ = [("dwSize", wintypes.DWORD), ("dwMask", wintypes.DWORD), ("pvid", ctypes.c_void_p),
+                    ("pszWebViewTemplate", wintypes.LPWSTR), ("cchWebViewTemplate", wintypes.DWORD),
+                    ("pszWebViewTemplateVersion", wintypes.LPWSTR), ("pszInfoTip", wintypes.LPWSTR),
+                    ("cchInfoTip", wintypes.DWORD), ("pclsid", ctypes.c_void_p), ("dwFlags", wintypes.DWORD),
+                    ("pszIconFile", wintypes.LPWSTR), ("cchIconFile", wintypes.DWORD),
+                    ("iIconIndex", ctypes.c_int), ("pszLogo", wintypes.LPWSTR), ("cchLogo", wintypes.DWORD)]
+    fcs = SHFOLDERCUSTOMSETTINGS()
+    fcs.dwSize = ctypes.sizeof(fcs)
+    fcs.dwMask = 0x10                       # FCSM_ICONFILE
+    fcs.pszIconFile = icon_file
+    fcs.iIconIndex = index
+    fn = ctypes.windll.shell32.SHGetSetFolderCustomSettings
+    fn.argtypes = [ctypes.POINTER(SHFOLDERCUSTOMSETTINGS), wintypes.LPCWSTR, wintypes.DWORD]
+    return fn(ctypes.byref(fcs), folder, 0x2) == 0        # FCS_FORCEWRITE
+
+
+def _split_icon(res: str):
+    """'C:\\x\\y.dll,-184' -> ('C:\\x\\y.dll', -184)"""
+    path, _, idx = res.rpartition(",")
+    if not path:
+        return res.strip(), 0
+    try:
+        return os.path.expandvars(path.strip().strip('"')), int(idx)
+    except ValueError:
+        return os.path.expandvars(res.strip().strip('"')), 0
+
+
 def _notify(folder: str):
     if not WIN:
         return
@@ -247,6 +282,10 @@ def set_color(folder: str, name: str | None) -> str | None:
                 _set_attrs(folder, a | FILE_ATTRIBUTE_READONLY)
         elif os.path.exists(ini):
             os.remove(ini)
+        # let Windows apply it the official way too, so Explorer refreshes the icon right away
+        final = _get(text, SECTION, "IconResource") if _has_content(text) else None
+        if final:
+            _api_set_icon(folder, *_split_icon(final))
         _notify(folder)
         return None
     except OSError as ex:

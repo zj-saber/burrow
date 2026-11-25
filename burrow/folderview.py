@@ -98,7 +98,7 @@ class NameDelegate(RowDelegate):
         """Name cell, plus colored tag dots at its right end. With no tags anywhere this is a
         single empty-dict check; with tags, one dict lookup per visible name."""
         store = tags.store()
-        if not store.items:
+        if not tags.ENABLED or not store.items:
             return super().paint(painter, option, index)
         e = index.data(ENTRY_ROLE)
         ids = store.get(e.path) if e is not None else []

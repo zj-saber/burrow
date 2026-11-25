@@ -88,6 +88,21 @@ DEFAULTS = {
     "theme": "system",
     "palette": "burrow",
     "everything_sizes": True,
+    # feature switches (Settings)
+    "show_folder_icons": True,      # Explorer folder colors/icons in the list and sidebar
+    "show_tags": True,              # tag dots, Tags menu and sidebar section
+    "preview_images": True,         # photos, RAW, PDFs (zoomable)
+    "preview_media": True,          # video and audio player
+    "preview_text": True,
+    "text_syntax_colors": True,
+    "preview_archives": True,
+    "media_arrow_seek": True,
+    "sidebar_places": True,
+    "sidebar_cloud": True,
+    "sidebar_tags": True,
+    "sidebar_network": True,
+    "single_instance": True,        # later launches open as tabs
+    "quick_access_sync": True,      # bookmarks pinned/unpinned in Explorer Quick Access
     "show_menubar": False,
     "bookmarks": [],
     "recent_servers": [],
@@ -110,6 +125,8 @@ class Config(QObject):
     viewChanged = Signal(object)      # the FolderView that made the change, or None
     settingsChanged = Signal()
     bookmarksChanged = Signal()
+    bookmarkAdded = Signal(str)
+    bookmarkRemoved = Signal(str)
     presetsChanged = Signal()
 
     def __init__(self):
@@ -232,11 +249,13 @@ class Config(QObject):
             return
         self.bookmarks().append({"name": name or os.path.basename(path.rstrip("\\/")) or path, "path": path})
         self._bookmarks_edited()
+        self.bookmarkAdded.emit(path)
 
     def remove_bookmark(self, path: str):
         n = _norm(path)
         self.data["bookmarks"] = [b for b in self.bookmarks() if _norm(b["path"]) != n]
         self._bookmarks_edited()
+        self.bookmarkRemoved.emit(path)
 
     def rename_bookmark(self, index: int, name: str):
         if 0 <= index < len(self.bookmarks()) and name:
