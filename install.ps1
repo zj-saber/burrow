@@ -10,13 +10,21 @@ $src = Join-Path $PSScriptRoot "dist\Burrow"
 if (-not (Test-Path "$src\Burrow.exe")) { throw "Build first: .\build.ps1" }
 $dest = Join-Path $env:LOCALAPPDATA "Programs\Burrow"
 
-# Close a running copy so its files can be replaced.
-Get-Process Burrow -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$dest*" } | ForEach-Object {
-    $_.CloseMainWindow() | Out-Null
-    if (-not $_.WaitForExit(5000)) { $_.Kill() }
+# Close running copies so their files can be replaced (ask nicely, then force), and retry the
+# delete for a few seconds while Windows releases the files.
+$running = Get-Process Burrow -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$dest*" }
+foreach ($p in $running) { $p.CloseMainWindow() | Out-Null }
+foreach ($p in $running) { if (-not $p.WaitForExit(4000)) { $p.Kill(); $p.WaitForExit(3000) | Out-Null } }
+if (Test-Path $dest) {
+    for ($i = 0; $i -lt 10; $i++) {
+        try { Remove-Item -Recurse -Force $dest -ErrorAction Stop; break }
+        catch {
+            if ($i -eq 9) { throw "Couldn't replace $dest (a file is still in use): $_" }
+            Get-Process Burrow -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$dest*" } | Stop-Process -Force
+            Start-Sleep -Milliseconds 700
+        }
+    }
 }
-
-if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
 New-Item -ItemType Directory -Force $dest | Out-Null
 Copy-Item -Recurse -Force "$src\*" $dest
 Copy-Item -Force "$PSScriptRoot\uninstall.ps1" $dest

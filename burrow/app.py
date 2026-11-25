@@ -172,6 +172,8 @@ class MainWindow(QMainWindow):
         self.act_network = A("Network", lambda: self.view().navigate(NETWORK))
         self.act_map_drive = A("Map network drive…", self.map_drive)
         self.act_unmap_drive = A("Disconnect network drive…", self.disconnect_drive)
+        self.act_default_fm = A("Use Burrow as default file manager", self.toggle_default_fm, checkable=True)
+        self.act_default_fm.setToolTip("When on, folders opened anywhere in Windows and Win+E open in Burrow. Off by default.")
         self.act_refresh = A("Refresh", self.refresh_view, "F5", icon=S(SP.SP_BrowserReload), tip="Refresh (F5)")
         self.act_address = A("Edit address", self.focus_address, ["Ctrl+L", "Alt+D", "F4"])
         self.act_filter = A("Filter…", lambda: self.view().focus_filter(), "Ctrl+F")
@@ -362,8 +364,9 @@ class MainWindow(QMainWindow):
         self.bookmarks_menu = mb.addMenu("&Bookmarks")
         self.bookmarks_menu.aboutToShow.connect(self._fill_bookmarks_menu)
         t = mb.addMenu("&Tools")
+        t.aboutToShow.connect(lambda: self.act_default_fm.setChecked(integration.is_default()))
         for a in (self.act_terminal, self.act_explorer, self.act_properties, None,
-                  self.act_map_drive, self.act_unmap_drive, None, self.act_settings):
+                  self.act_map_drive, self.act_unmap_drive, None, self.act_default_fm, None, self.act_settings):
             t.addSeparator() if a is None else t.addAction(a)
         v.addAction(self.act_menubar)
 
@@ -1030,6 +1033,23 @@ class MainWindow(QMainWindow):
         self.show()
         self.raise_()
         self.activateWindow()
+
+    def toggle_default_fm(self, on: bool):
+        """Turn 'Burrow opens folders and Win+E' on or off (per user; off unless you turn it on)."""
+        if on and QMessageBox.question(
+                self, "Default file manager",
+                "Open folders and drives in Burrow everywhere in Windows (desktop, Explorer, Run, "
+                "shortcuts) and use it for Win+E?\n\nYou can turn this off again from the same menu "
+                "or in Settings.") != QMessageBox.StandardButton.Yes:
+            self.act_default_fm.setChecked(False)
+            return
+        err = integration.set_default(on)
+        if err:
+            QMessageBox.warning(self, "Default file manager", f"Couldn't change the setting: {err}")
+        state = integration.is_default()
+        self.act_default_fm.setChecked(state)
+        self.statusBar().showMessage(
+            "Burrow is now the default file manager" if state else "Folders open in Explorer again", 5000)
 
     def map_drive(self):
         places.map_drive_dialog(int(self.winId()))
