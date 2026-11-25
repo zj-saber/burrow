@@ -150,6 +150,13 @@ class FileTree(QTreeView):
         super().__init__(owner)
         self.owner = owner
 
+    def wheelEvent(self, ev):
+        if (ev.modifiers() & Qt.KeyboardModifier.ControlModifier and self.owner.icon_wheel_handler is not None
+                and ev.angleDelta().y()):
+            self.owner.icon_wheel_handler(1 if ev.angleDelta().y() > 0 else -1)
+            return
+        super().wheelEvent(ev)
+
     def is_editing(self) -> bool:
         return self.state() == QAbstractItemView.State.EditingState
 
@@ -164,6 +171,10 @@ class FileTree(QTreeView):
                 and self.owner.seek_handler(1 if ev.key() == Qt.Key.Key_Right else -1,
                                             bool(ev.modifiers() & Qt.KeyboardModifier.ShiftModifier))):
             return                                  # arrows seek the previewed video/audio
+        if (ev.key() == Qt.Key.Key_Left and mods == Qt.KeyboardModifier.NoModifier
+                and not ev.modifiers() & Qt.KeyboardModifier.ShiftModifier
+                and self.owner.sidebar_handler is not None and self.owner.sidebar_handler()):
+            return                                  # ← goes to the sidebar
         if ev.key() == Qt.Key.Key_Escape and self.owner.filter_text():
             self.owner.clear_filter()
             return
@@ -255,6 +266,8 @@ class FolderView(QWidget):
         self._load_token = 0
         self.space_handler = None          # set by the window: Space plays media previews
         self.seek_handler = None           # set by the window: Left/Right seek media previews
+        self.sidebar_handler = None        # set by the window: ← moves focus to the sidebar
+        self.icon_wheel_handler = None     # set by the window: Ctrl+wheel changes icon size
         self.loading = False
         self.mode = config.get("view_mode") if config.get("view_mode") in ("list", "columns") else "list"
         self.columns = None                # built the first time this tab shows columns
@@ -411,6 +424,7 @@ class FolderView(QWidget):
             c.openRequested.connect(lambda paths: self.open_entries(DirModel.fetch_paths(paths)))
             c.contextMenu.connect(lambda pos: self.contextMenuRequested.emit(pos))
             c.selectionModel().selectionChanged.connect(lambda *_: self.selectionChanged.emit())
+            c.extra_actions = list(self.tree.actions())   # Ctrl+C, Del, F2... work in columns too
             self._lay.insertWidget(2, c, 1)
         if self.columns is not None:
             self.columns.setVisible(want)

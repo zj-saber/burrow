@@ -104,11 +104,22 @@ DEFAULTS = {
     "sidebar_network": True,
     "single_instance": True,        # later launches open as tabs
     "quick_access_sync": True,      # bookmarks pinned/unpinned in Explorer Quick Access
-    "inspector_details": True,
-    "inspector_split": 0.6,
-    "sidebar_order": [],
+    "inspector_details": True,      # file details shown under the preview
+    "inspector_split": 0.6,         # preview height share in the inspector
+    "inspector_resizable": True,    # drag handle under photo / PDF / video previews
+    "sidebar_order": [],            # section keys, top to bottom (dragged by their headings)
+    "sidebar_drag_reorder": True,   # drag sidebar headings to reorder sections
     "icon_size": 16,                # list / columns icon size (slider at the bottom)
-    "view_mode": "list",            # new tabs open as "list" or "columns"            # section keys, top to bottom (dragged by their headings)         # preview height share in the inspector      # file details shown under the preview
+    "ctrl_wheel_icon_size": True,   # Ctrl+wheel over the list changes the icon size (like Explorer)
+    "view_mode": "list",            # new tabs open as "list" or "columns"
+    "status_sort_toggle": True,     # status bar: Sort folders-first / mixed
+    "status_view_toggle": True,     # status bar: View list / columns
+    "status_icon_slider": True,     # status bar: icon size slider
+    "confirm_delete_permanent": True,
+    "arrow_sidebar_nav": True,      # ← from the list goes to the sidebar, → comes back
+    "shortcut_scheme": "explorer",  # "explorer" (Windows Explorer keys) or "classic" (Burrow 0.11)
+    "backdrop": "none",             # window material: none, mica, mica_alt, acrylic
+    "backdrop_tint": "medium",      # how much theme color covers it: light, medium, strong
     "win_e_opens": "window",        # Win+E: "window" or "tab"
     "split": "",                    # "", "h" (side by side) or "v" (stacked)
     "session_tabs2": [],

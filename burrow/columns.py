@@ -70,6 +70,7 @@ class ColumnsView(QColumnView):
         self.activated.connect(self._activated)
         self.selectionModel().currentChanged.connect(self._current_changed)
         self._quiet = False
+        self.extra_actions = []          # the window's file actions, added to every column
 
     def createColumn(self, index):
         col = super().createColumn(index)       # each column is its own list: route its menu here
@@ -81,6 +82,7 @@ class ColumnsView(QColumnView):
         col.setFrameShape(QFrame.Shape.NoFrame)
         col.setViewportMargins(0, 0, 1, 0)       # 1px of window color between columns
         col.setIconSize(self.iconSize())
+        col.addActions(self.extra_actions)
         return col
 
     def set_icon_size(self, px: int, row_height: int):

@@ -185,6 +185,23 @@ class SettingsDialog(QDialog):
         self.date_fmt.setCurrentIndex(max(self.date_fmt.findData(config.get("date_format")), 0))
         f.addRow("Theme:", self.theme)
         f.addRow("Colors:", self.palette)
+        from . import backdrop as _bd
+        self.backdrop = QComboBox()
+        for label, data in [(v, k) for k, v in _bd.NAMES.items()]:
+            self.backdrop.addItem(label, data)
+        self.backdrop.setCurrentIndex(max(self.backdrop.findData(config.get("backdrop")), 0))
+        self.backdrop_tint = QComboBox()
+        for label, data in [("Light (more see-through)", "light"), ("Medium", "medium"), ("Strong (more solid)", "strong")]:
+            self.backdrop_tint.addItem(label, data)
+        self.backdrop_tint.setCurrentIndex(max(self.backdrop_tint.findData(config.get("backdrop_tint")), 0))
+        if not _bd.supported():
+            self.backdrop.setEnabled(False)
+            self.backdrop_tint.setEnabled(False)
+            self.backdrop.setToolTip("Needs Windows 11 22H2 or newer")
+        f.addRow("Window material:", self.backdrop)
+        f.addRow("Material tint:", self.backdrop_tint)
+        f.addRow(note("Mica and Acrylic are drawn by Windows itself, so they cost almost nothing. "
+                      "They show while the window is active."))
         f.addRow("Date format:", self.date_fmt)
 
         behave = QGroupBox("Behavior")
@@ -198,6 +215,13 @@ class SettingsDialog(QDialog):
         nt_row.addWidget(nt_browse)
         f.addRow("New tabs open:", nt_row)
         f.addRow(check("confirm_delete", "Ask before moving items to the Recycle Bin"))
+        f.addRow(check("confirm_delete_permanent", "Ask before deleting permanently (Shift+Del)"))
+        self.shortcut_scheme = QComboBox()
+        for label, data in [("Windows Explorer", "explorer"), ("Burrow classic (0.11)", "classic")]:
+            self.shortcut_scheme.addItem(label, data)
+        self.shortcut_scheme.setCurrentIndex(max(self.shortcut_scheme.findData(config.get("shortcut_scheme")), 0))
+        f.addRow("Keyboard shortcuts:", self.shortcut_scheme)
+        f.addRow(check("arrow_sidebar_nav", "← from the file list goes to the sidebar; ↑/↓ there browse, → comes back"))
         f.addRow(check("single_instance", "Open new windows as tabs in the running Burrow",
                        "When off, every launch opens its own window (takes effect next start)."))
 
@@ -211,6 +235,7 @@ class SettingsDialog(QDialog):
         f.addRow(check("text_syntax_colors", "Syntax colors in text previews"))
         f.addRow(check("preview_archives", "Archive contents (zip, rar, 7z…)"))
         f.addRow(check("preview_epub", "EPUB books (cover, details and a chapter reader)"))
+        f.addRow(check("inspector_resizable", "Drag handle to make photo / PDF / video previews taller"))
         f.addRow(note("Turned-off previews still show the file's details."))
 
         # ----- Sidebar & list ------------------------------------------------------
@@ -219,12 +244,24 @@ class SettingsDialog(QDialog):
         f.addRow(check("show_hidden", "Show hidden and system files"))
         f.addRow(check("show_folder_icons", "Show Explorer folder colors and custom folder icons"))
         f.addRow(check("show_tags", "Color tags (dots, Tags menu and sidebar section)"))
+        self.view_mode = QComboBox()
+        for label, data in [("List", "list"), ("Columns", "columns")]:
+            self.view_mode.addItem(label, data)
+        self.view_mode.setCurrentIndex(max(self.view_mode.findData(config.get("view_mode")), 0))
+        f.addRow("New tabs open as:", self.view_mode)
+        f.addRow(check("ctrl_wheel_icon_size", "Ctrl+mouse wheel changes the icon size"))
+        bar = QGroupBox("Status bar")
+        fb = QFormLayout(bar)
+        fb.addRow(check("status_sort_toggle", "Sort switch (folders first / mixed)"))
+        fb.addRow(check("status_view_toggle", "View switch (list / columns)"))
+        fb.addRow(check("status_icon_slider", "Icon size slider"))
         side = QGroupBox("Sidebar sections")
         f = QFormLayout(side)
         f.addRow(check("sidebar_places", "Places (Home, Desktop, Documents…)"))
         f.addRow(check("sidebar_cloud", "Cloud (OneDrive, iCloud…)"))
         f.addRow(check("sidebar_tags", "Tags"))
         f.addRow(check("sidebar_network", "Network"))
+        f.addRow(check("sidebar_drag_reorder", "Drag section headings to reorder them"))
         f.addRow(note("Bookmarks and This PC are always shown. Any section can also be collapsed by clicking its heading."))
 
         # ----- Integrations --------------------------------------------------------
@@ -282,7 +319,7 @@ class SettingsDialog(QDialog):
         tabs = QTabWidget()
         tabs.addTab(page(look, behave), "General")
         tabs.addTab(page(prev), "Preview")
-        tabs.addTab(page(lst, side), "Sidebar && list")
+        tabs.addTab(page(lst, bar, side), "Sidebar && list")
         tabs.addTab(page(win, tc_box, ev_box), "Integrations")
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
@@ -335,6 +372,10 @@ class SettingsDialog(QDialog):
             "theme": self.theme.currentData(),
             "palette": self.palette.currentData(),
             "win_e_opens": self.win_e_opens.currentData(),
+            "backdrop": self.backdrop.currentData(),
+            "backdrop_tint": self.backdrop_tint.currentData(),
+            "shortcut_scheme": self.shortcut_scheme.currentData(),
+            "view_mode": self.view_mode.currentData(),
         })
         self.config.update(values)
         self.accept()

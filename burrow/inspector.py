@@ -621,6 +621,12 @@ class Inspector(QWidget):
             top = total - max(60, self.body.sizeHint().height() if self.body.sizeHint().height() < total // 3 else 90)
         self.split.setSizes([top, max(60, total - top)])
 
+    def set_resizable(self, on: bool):
+        h = self.split.handle(1)
+        h.setEnabled(on)
+        self.split.setHandleWidth(9 if on else 4)
+        h.setCursor(Qt.CursorShape.SplitVCursor if on else Qt.CursorShape.ArrowCursor)
+
     def _split_moved(self, *_):
         sizes = self.split.sizes()
         if sum(sizes) and self.details.isVisible():

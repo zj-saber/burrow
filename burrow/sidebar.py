@@ -50,7 +50,8 @@ class _SidebarDelegate(QStyledItemDelegate):
         opt = QStyleOptionViewItem(option)
         self.initStyleOption(opt, index)
         selected = bool(opt.state & QStyle.StateFlag.State_Selected)
-        hovered = bool(opt.state & QStyle.StateFlag.State_MouseOver) and bool(index.flags() & Qt.ItemFlag.ItemIsSelectable)
+        hovered = (bool(opt.state & QStyle.StateFlag.State_MouseOver) and bool(index.flags() & Qt.ItemFlag.ItemIsSelectable)) \
+            or bool(opt.state & QStyle.StateFlag.State_HasFocus)
         if selected or hovered:
             painter.save()
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -72,6 +73,8 @@ class Sidebar(QTreeWidget):
     dropRequested = Signal(list, str, bool)    # sources, target, move?
     mapDriveRequested = Signal()
     disconnectRequested = Signal(str)          # drive letter
+    browseRequested = Signal(str)              # arrowing through: open, but keep focus here
+    focusListRequested = Signal()              # → / Enter: back to the file list
 
     def __init__(self, config: Config, parent=None):
         super().__init__(parent)
@@ -103,6 +106,13 @@ class Sidebar(QTreeWidget):
         self._building = False
         self._press = None          # (pos, heading key) when a heading is pressed
         self._drop_y = None         # where the reorder line is drawn while dragging
+        self.drag_reorder = True    # Settings switch
+        self._kbd = False           # the current item moved by keyboard
+        self._browse_timer = QTimer(self)
+        self._browse_timer.setSingleShot(True)
+        self._browse_timer.setInterval(160)   # arrowing fast doesn't load every folder
+        self._browse_timer.timeout.connect(self._browse_current)
+        self.currentItemChanged.connect(self._current_moved)
         config.bookmarksChanged.connect(self.rebuild)
         tags.store().changed.connect(self.rebuild)
         self._drive_sig = None
@@ -159,7 +169,8 @@ class Sidebar(QTreeWidget):
                 it.setForeground(0, Qt.GlobalColor.gray)
                 it.setToolTip(0, f"{b['path']} (not available)")
         if not self.config.bookmarks():
-            hint = QTreeWidgetItem(bm, ["Ctrl+D bookmarks a folder"])
+            key = "Ctrl+D" if self.config.get("shortcut_scheme") == "classic" else "Ctrl+B"
+            hint = QTreeWidgetItem(bm, [f"{key} bookmarks a folder"])
             hint.setFlags(Qt.ItemFlag.NoItemFlags)
         cfg = self.config
         sect = self._section("Places", key="places") if cfg.get("sidebar_places") else None
@@ -306,7 +317,7 @@ class Sidebar(QTreeWidget):
         self._press = None
         if ev.button() == Qt.MouseButton.LeftButton:
             it = self.itemAt(ev.position().toPoint())
-            if it is not None and it.parent() is None and it.data(0, SECTION_ROLE):
+            if self.drag_reorder and it is not None and it.parent() is None and it.data(0, SECTION_ROLE):
                 self._press = (ev.position().toPoint(), it.data(0, SECTION_ROLE))
             # the chevron at the start of a heading toggles it, even on link headings
             if (it is not None and it.parent() is None and it.data(0, SECTION_ROLE)
@@ -319,6 +330,63 @@ class Sidebar(QTreeWidget):
                 self.openRequested.emit(it.data(0, PATH_ROLE), True)
             return
         super().mousePressEvent(ev)
+
+    # ----- keyboard: ↑/↓ browse as you go, ← / → collapse, expand or go back to the list ----
+    def focus_from_list(self):
+        """Land on the current folder's entry, or the first real entry."""
+        sel = self.selectedItems()
+        target = sel[0] if sel else None
+        if target is None:
+            for i in range(self.topLevelItemCount()):
+                top = self.topLevelItem(i)
+                kids = [top.child(j) for j in range(top.childCount())] if top.isExpanded() else []
+                target = next((k for k in [top] + kids if k.data(0, PATH_ROLE)), None)
+                if target is not None:
+                    break
+        if target is not None:
+            self.setCurrentItem(target)
+        self.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def keyPressEvent(self, ev):
+        it = self.currentItem()
+        key = ev.key()
+        if ev.modifiers() & ~Qt.KeyboardModifier.KeypadModifier:
+            return super().keyPressEvent(ev)
+        if key == Qt.Key.Key_Right:
+            if it is not None and it.parent() is None and it.childCount() and not it.isExpanded():
+                it.setExpanded(True)
+            else:
+                self.focusListRequested.emit()
+            return
+        if key == Qt.Key.Key_Left:
+            if it is not None and it.parent() is not None:
+                self.setCurrentItem(it.parent())
+            elif it is not None and it.isExpanded():
+                it.setExpanded(False)
+            return
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+            if it is not None and it.parent() is None and not it.data(0, PATH_ROLE):
+                it.setExpanded(not it.isExpanded())
+            elif it is not None and it.data(0, PATH_ROLE):
+                self._browse_timer.stop()
+                self.openRequested.emit(it.data(0, PATH_ROLE), False)
+            return
+        if key == Qt.Key.Key_Escape:
+            self.focusListRequested.emit()
+            return
+        self._kbd = key in (Qt.Key.Key_Up, Qt.Key.Key_Down, Qt.Key.Key_Home, Qt.Key.Key_End,
+                            Qt.Key.Key_PageUp, Qt.Key.Key_PageDown)
+        super().keyPressEvent(ev)
+        self._kbd = False
+
+    def _current_moved(self, cur, _prev):
+        if self._kbd and cur is not None and cur.data(0, PATH_ROLE):
+            self._browse_timer.start()
+
+    def _browse_current(self):
+        it = self.currentItem()
+        if it is not None and it.data(0, PATH_ROLE) and self.hasFocus():
+            self.browseRequested.emit(it.data(0, PATH_ROLE))
 
     def mouseMoveEvent(self, ev):
         if self._press and ev.buttons() & Qt.MouseButton.LeftButton and \

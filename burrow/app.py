@@ -256,10 +256,14 @@ class MainWindow(QMainWindow):
         if QApplication.windowIcon().isNull():
             self.setWindowIcon(icon_cache().folder)
 
+        self._backdrop_key = (config.get("backdrop"), config.get("backdrop_tint"))
+        if self._translucent():                  # must be set before the window first shows
+            self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self._make_actions()
         self._make_ui()
         self._make_menus()
         self.apply_theme()
+        self.apply_ui_switches()
         self._listing_key = (config.get("show_hidden"), config.get("date_format"), config.get("everything_sizes"))
         try:
             QGuiApplication.styleHints().colorSchemeChanged.connect(self._system_scheme_changed)
@@ -393,6 +397,36 @@ class MainWindow(QMainWindow):
         self.act_invert = T("Invert selection", self.invert_selection, "Ctrl+I")
         self.act_properties = T("Properties", self.properties, "Alt+Return")
         self.act_back_key = T("Back", self.backspace, "Backspace")
+        self.act_open_window = T("Open in new window", self.open_selected_in_window)
+        self.act_fullscreen = A("Full screen", self.toggle_fullscreen, "F11")
+        self.act_details_pane = A("Show details in the inspector", lambda: self.inspector.set_details_visible(
+            not self.inspector.details.isVisible(), user=True), "Alt+Shift+P")
+        self.act_focus_sidebar = A("Go to the sidebar", self.focus_sidebar, "Ctrl+Shift+E")
+        self.act_cycle_focus = A("Next area", lambda: self.cycle_focus(1))
+        self.act_cycle_focus_back = A("Previous area", lambda: self.cycle_focus(-1))
+        self.act_list_view = A("List view", lambda: self.set_view_mode("list"), "Ctrl+Shift+6")
+        for n, px in ((1, 64), (2, 48), (3, 32), (4, 16)):     # Explorer: extra large ... small icons
+            A(f"Icons {px} px", lambda px=px: self.icon_slider.setValue(px), f"Ctrl+Shift+{n}")
+        self.apply_shortcuts()
+
+    # Burrow 0.11 keys that differ from Windows Explorer
+    SHORTCUTS = {
+        "classic": {"act_refresh": ["F5"], "act_filter": ["Ctrl+F"], "act_bookmark": ["Ctrl+D"],
+                    "act_delete": ["Del"], "act_other_pane": ["F6"], "act_cycle_focus": [],
+                    "act_cycle_focus_back": [], "act_open_tab": ["Ctrl+Return"], "act_open_window": [],
+                    "act_close_tab": ["Ctrl+W"]},
+        "explorer": {"act_refresh": ["F5", "Ctrl+R"], "act_filter": ["Ctrl+F", "Ctrl+E", "F3"],
+                     "act_bookmark": ["Ctrl+B"], "act_delete": ["Del", "Ctrl+D"], "act_other_pane": ["Ctrl+F6"],
+                     "act_cycle_focus": ["F6"], "act_cycle_focus_back": ["Shift+F6"],
+                     "act_open_tab": ["Ctrl+Shift+Return"], "act_open_window": ["Ctrl+Return"],
+                     "act_close_tab": ["Ctrl+W", "Ctrl+F4"]},
+    }
+
+    def apply_shortcuts(self):
+        scheme = self.SHORTCUTS.get(self.config.get("shortcut_scheme"), self.SHORTCUTS["explorer"])
+        for name, keys in scheme.items():
+            getattr(self, name).setShortcuts([QKeySequence(k) for k in keys])
+        self.act_refresh.setToolTip("Refresh (F5)")
 
     def _tool_button(self, action, parent):
         b = QToolButton(parent)
@@ -457,6 +491,8 @@ class MainWindow(QMainWindow):
 
         self.sidebar = Sidebar(self.config)
         self.sidebar.openRequested.connect(self._sidebar_open)
+        self.sidebar.browseRequested.connect(lambda p: self.view().navigate(p))
+        self.sidebar.focusListRequested.connect(lambda: self.view().focus_list())
         self.sidebar.dropRequested.connect(self.transfer)
         self.sidebar.mapDriveRequested.connect(self.map_drive)
         self.sidebar.disconnectRequested.connect(self.disconnect_drive)
@@ -661,6 +697,14 @@ class MainWindow(QMainWindow):
     def apply_theme(self):
         c = theme.apply(QApplication.instance(), self.config.get("theme"), self.config.get("palette"))
         self._theme_key = (self.config.get("theme"), c["name"], self.config.get("palette"))
+        if self._translucent():
+            from . import backdrop
+            c = backdrop.tinted(c, self.config.get("backdrop_tint"))
+            self.setPalette(theme._palette(c))       # this window only: menus/dialogs stay solid
+        else:
+            self.setPalette(QApplication.palette())
+        if self.isVisible():
+            self._native_backdrop(c)
         tf = QApplication.font()                 # inspector title follows the theme font
         tf.setBold(True)
         tf.setPointSizeF(tf.pointSizeF() * 1.15)
@@ -900,6 +944,8 @@ class MainWindow(QMainWindow):
         v.tree.dropRequested.connect(self.transfer)
         v.space_handler = self._space_pressed
         v.seek_handler = self._seek_pressed
+        v.sidebar_handler = self._list_left_pressed
+        v.icon_wheel_handler = self._icon_wheel
         if not v.navigate(path, record=False):
             v.navigate(HOME, record=False)
         idx = self.tabs.currentIndex() + 1 if after_current and self.tabs.count() else self.tabs.count()
@@ -1027,7 +1073,7 @@ class MainWindow(QMainWindow):
         self.sort_mode_btn.blockSignals(False)
         self.sort_mode_btn.setText("Sort: mixed" if mixed else "Sort: folders first")
         cols = v.mode == "columns"
-        self.sort_mode_btn.setVisible(not v.columns_active())     # columns keep folders on top
+        self.sort_mode_btn.setVisible(bool(self.config.get("status_sort_toggle")) and not v.columns_active())
         self.view_mode_btn.blockSignals(True)
         self.view_mode_btn.setChecked(cols)
         self.view_mode_btn.blockSignals(False)
@@ -1053,6 +1099,97 @@ class MainWindow(QMainWindow):
             v.set_mode(mode)
         self.config.set("view_mode", mode)
         self._sync_sort_mode(v)
+
+    # ----- window material (Mica / Acrylic) ----------------------------------------------
+    def _translucent(self) -> bool:
+        from . import backdrop
+        return self.config.get("backdrop") in ("mica", "mica_alt", "acrylic") and backdrop.supported()
+
+    def _native_backdrop(self, c=None):
+        from . import backdrop
+        c = c or getattr(self, "_theme", None) or theme.colors()
+        hwnd = int(self.winId())
+        backdrop.set_dark_title(hwnd, c.get("name") == "dark")      # title bar follows the theme
+        backdrop.apply(hwnd, self.config.get("backdrop") if self._translucent() else "none")
+
+    def apply_backdrop(self):
+        """Switch the material. Turning see-through on/off needs a new native window, so the
+        window is re-created in place (same size, tabs and state)."""
+        self._backdrop_key = (self.config.get("backdrop"), self.config.get("backdrop_tint"))
+        want = self._translucent()
+        if want != self.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground):
+            self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, want)
+            if self.isVisible():
+                geo, state = self.saveGeometry(), self.windowState()
+                self.hide()
+                self.destroy(True, False)
+                self.create()
+                self.restoreGeometry(geo)
+                self.setWindowState(state)
+                self.show()
+        self.apply_theme()
+
+    # ----- keyboard ------------------------------------------------------------------------
+    def _list_left_pressed(self) -> bool:
+        if not self.config.get("arrow_sidebar_nav") or not self.side_dock.isVisible():
+            return False
+        self.focus_sidebar()
+        return True
+
+    def focus_sidebar(self):
+        if not self.side_dock.isVisible():
+            self.side_dock.show()
+        self.sidebar.highlight(self.view().path)
+        self.sidebar.focus_from_list()
+
+    def cycle_focus(self, step: int):
+        """F6 / Shift+F6 like Explorer: address bar, sidebar, then each pane's files."""
+        areas = [("address", None)]
+        if self.side_dock.isVisible():
+            areas.append(("sidebar", None))
+        areas += [("pane", p) for p in self.panes]
+        fw = QApplication.focusWidget()
+        cur = 0                                   # the address bar sits inside a single pane: test it first
+        if fw is not None and not self.address_area.isAncestorOf(fw):
+            for i, (kind, p) in enumerate(areas):
+                if (kind == "sidebar" and fw is self.sidebar) or (kind == "pane" and p.isAncestorOf(fw)):
+                    cur = i
+        kind, p = areas[(cur + step) % len(areas)]
+        if kind == "address":
+            self.focus_address()
+        elif kind == "sidebar":
+            self.focus_sidebar()
+        else:
+            self.set_active_pane(p)
+            if p.tabs.currentWidget():
+                p.tabs.currentWidget().focus_list()
+
+    def toggle_fullscreen(self):
+        self.showNormal() if self.isFullScreen() else self.showFullScreen()
+
+    def open_selected_in_window(self):
+        dirs = [e.path for e in self.view().selected_entries() if e.is_dir]
+        if dirs:
+            open_new_window(self.config, dirs)
+
+    def _icon_wheel(self, step: int):
+        if not self.config.get("ctrl_wheel_icon_size"):
+            return
+        self.icon_slider.setValue(self.icon_slider.value() + 4 * step)
+
+    def apply_ui_switches(self):
+        """Settings switches for the status bar, sidebar dragging, preview handle and keys."""
+        c = self.config
+        self.view_mode_btn.setVisible(bool(c.get("status_view_toggle")))
+        for wdg in (self.icon_small, self.icon_slider, self.icon_big):
+            wdg.setVisible(bool(c.get("status_icon_slider")))
+        self.sidebar.drag_reorder = bool(c.get("sidebar_drag_reorder"))
+        self.inspector.set_resizable(bool(c.get("inspector_resizable")))
+        if c.get("shortcut_scheme") != getattr(self, "_scheme", None):
+            self._scheme = c.get("shortcut_scheme")
+            self.apply_shortcuts()
+            self.sidebar.rebuild()                 # the bookmarks hint names the key
+        self._sync_sort_mode()
 
     def _view_preset_changed(self, _src=None):
         QTimer.singleShot(0, self, self._sync_sort_mode)    # after the views have re-applied it
@@ -1083,6 +1220,10 @@ class MainWindow(QMainWindow):
 
     def _settings_changed(self):
         self.act_hidden.setChecked(self.config.get("show_hidden"))
+        self.apply_ui_switches()
+        bd = (self.config.get("backdrop"), self.config.get("backdrop_tint"))
+        if bd != getattr(self, "_backdrop_key", None):
+            self.apply_backdrop()
         if (self.config.get("theme"), theme.resolve(self.config.get("theme")), self.config.get("palette")) != self._theme_key:
             self.apply_theme()
         bg = (self.config.get("win_e"), self.config.get("run_in_background"))
@@ -1386,15 +1527,22 @@ class MainWindow(QMainWindow):
             return
         desc = f"“{es[0].name}”" if len(es) == 1 else f"these {len(es)} items"
         if permanent:
-            if QMessageBox.warning(self, "Delete permanently", f"Permanently delete {desc}?\n\nThis can't be undone.",
-                                   QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                                   QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            if self.config.get("confirm_delete_permanent") and \
+                    QMessageBox.warning(self, "Delete permanently", f"Permanently delete {desc}?\n\nThis can't be undone.",
+                                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                        QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
                 return
         elif self.config.get("confirm_delete"):
-            if QMessageBox.question(self, "Delete", f"Move {desc} to the Recycle Bin?",
-                                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                                    QMessageBox.StandardButton.Yes) != QMessageBox.StandardButton.Yes:
+            from PySide6.QtWidgets import QCheckBox
+            box = QMessageBox(QMessageBox.Icon.Question, "Delete", f"Move {desc} to the Recycle Bin?",
+                              QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, self)
+            box.setDefaultButton(QMessageBox.StandardButton.Yes)
+            dont = QCheckBox("Don't ask again (turn it back on in Settings ▸ General)")
+            box.setCheckBox(dont)
+            if box.exec() != QMessageBox.StandardButton.Yes:
                 return
+            if dont.isChecked():
+                self.config.set("confirm_delete", False)
         v = self.view()
         row = v.tree.currentIndex().row()
         ok, aborted = fileops.delete_paths([e.path for e in es], int(self.winId()), permanent)
@@ -1623,6 +1771,7 @@ class MainWindow(QMainWindow):
 
     def showEvent(self, ev):
         super().showEvent(ev)
+        self._native_backdrop()
         if not self._docks_sized:              # first run: sensible panel widths (needs a shown window)
             self._docks_sized = True
             self.resizeDocks([self.side_dock, self.insp_dock], [230, 320], Qt.Orientation.Horizontal)

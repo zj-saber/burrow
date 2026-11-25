@@ -8,6 +8,10 @@ A tabbed file manager for Windows, written in Python with Qt (PySide6).
 - **Mixed or folders-first sorting**: the *Sort* switch at the bottom right puts folders on top, or sorts files, folders and archives together purely by the column you sorted on (FilePilot-style). It applies to every folder.
 - **Columns view** (optional, like macOS Finder or One Commander): *View: list / columns* at the bottom right, View ▸ Columns view, or Ctrl+Shift+L. Each folder you pick opens in a new column to the right. This PC, Network and tag pages stay a list. Columns have no scroll bars, for a compact look (the wheel, Shift+wheel and arrow keys scroll).
 - **Icon size slider** at the bottom right: 16 to 64 px icons in the list and columns, for every tab and window, remembered.
+- **Themes**: Burrow, Primary, Greyscale, Sepia, OLED black and Calm (low contrast, little blue light), each in light and dark.
+- **Window material** (Windows 11): Mica, Mica Alt or Acrylic behind the window, with a light/medium/strong tint. Windows draws it, so it costs almost nothing.
+- **Keyboard first**: Windows Explorer's shortcuts, ← from the list into the sidebar (↑/↓ browse as you go), F6 between areas.
+- **Delete without the question**: tick *Don't ask again* in the delete dialog; turn it back on in Settings.
 - **Type to filter**: start typing in any folder to filter it by name. Backspace removes a character, Esc clears the filter.
 - **File operations**: cut, copy and paste (the clipboard works with Explorer), rename in place with F2 or a slow click, delete to the Recycle Bin, permanent delete, new folder or text file, Copy to / Move to, and drag and drop.
 - **TeraCopy integration**: paste, drag and drop, Copy to and Move to all hand the transfer to TeraCopy when it's installed. It is found automatically, or you can set its path in Settings. **Paste with built-in copier** skips TeraCopy for one paste. Duplicating an item in its own folder always uses the built-in copier.
@@ -17,7 +21,7 @@ A tabbed file manager for Windows, written in Python with Qt (PySide6).
 - **Multiple windows**: Ctrl+N, a tab's right-click ▸ Open in new window, and Win+E (Settings: Win+E opens a new window or a new tab).
 - **EPUB books** in the inspector: cover, title/author/publisher, and a chapter reader (‹ › chapters, Ctrl+wheel text size, ⤢ large reader).
 - **Collapsible details**: click *Details* in the inspector to fold the file information away and give the preview the space. Drag the line under a photo, PDF or video to make the preview taller or shorter; Burrow remembers the height.
-- **Bookmarks sidebar** (Ctrl+D), plus common places and drives. Each section collapses: click a heading, or use the arrow beside This PC and Network. Burrow remembers which sections you closed. Drag a heading up or down to reorder the sections (right-click a heading to reset the order). Drop files on a sidebar entry to copy or move them there, or drop folders on "Bookmarks" to bookmark them.
+- **Bookmarks sidebar** (Ctrl+B), plus common places and drives. Each section collapses: click a heading, or use the arrow beside This PC and Network. Burrow remembers which sections you closed. Drag a heading up or down to reorder the sections (right-click a heading to reset the order). Drop files on a sidebar entry to copy or move them there, or drop folders on "Bookmarks" to bookmark them.
 - **Inspector** (Alt+P): plays video and audio (Space plays or pauses, ← / → seek 5 s and Shift+← / → seek 30 s; video opens on a poster frame, audio shows cover art and tags), previews images and any text file (YAML, JSON, INI, TOML, XML, code, logs, subtitles... with syntax colors) and shows file details: created, modified and accessed dates, attributes, and folder contents.
 - **Cloud drives**: OneDrive, iCloud Drive/Photos, Dropbox, Google Drive, Box and others are found through Windows' sync-root registry and shown in the sidebar and in This PC, with each provider's own icon. Files that are only in the cloud are never downloaded just to preview them.
 - **Network drives**: mapped drives show up (including remembered ones that are disconnected; opening one reconnects it), along with a **Network** page. Type `\\computer` to see its shared folders. Computers you open are remembered in the sidebar. *Tools ▸ Map network drive…* and *Disconnect…* use the standard Windows dialogs.
@@ -52,18 +56,37 @@ The first run creates a `.venv` and installs PySide6. Settings are saved in `%AP
 
 ## Shortcuts
 
+Burrow uses Windows Explorer's keys by default (*Settings ▸ General ▸ Keyboard shortcuts* switches back to Burrow classic).
+
 | Keys | Action |
 |---|---|
+| Ctrl+N / Ctrl+T | New window / new tab |
+| Ctrl+W / Ctrl+F4 | Close tab |
+| Ctrl+Tab / Ctrl+Shift+Tab | Next / previous tab |
 | Ctrl+L / Alt+D / F4 | Edit address |
-| Alt+Left / Alt+Right / Alt+Up | Back / Forward / Up |
-| Backspace | Back (or delete a filter character) |
+| Ctrl+F / Ctrl+E / F3 | Filter (search this folder) |
+| Alt+Left / Alt+Right / Alt+Up / Backspace | Back / Forward / Up / Back |
+| Alt+Home | Home |
+| F5 / Ctrl+R | Refresh |
+| F6 / Shift+F6 | Move between address bar, sidebar and panes |
+| Ctrl+Shift+E | Go to the sidebar |
+| ← (in the list) | Go to the sidebar; ↑/↓ browse there, → or Esc come back |
+| Enter / Ctrl+Enter | Open / open folder in a new window |
+| Ctrl+Shift+Enter | Open folder in a new tab |
 | F2 | Rename |
-| Del / Shift+Del | Recycle / Delete permanently |
-| Ctrl+Shift+N | New folder |
-| Ctrl+Shift+V | Paste with TeraCopy |
+| Del / Ctrl+D | Move to the Recycle Bin |
+| Shift+Del | Delete permanently |
+| Ctrl+C / Ctrl+X / Ctrl+V / Ctrl+A | Copy / cut / paste / select all |
 | Ctrl+Shift+C | Copy path |
-| Ctrl+H | Toggle hidden files |
-| Ctrl+Shift+L | List / columns view |
-| Ctrl+D | Bookmark folder |
+| Ctrl+Shift+N | New folder |
+| Ctrl+Shift+1 … 4 | Icons 64 / 48 / 32 / 16 px |
+| Ctrl+Shift+6 / Ctrl+Shift+L | List view / toggle columns view |
+| Ctrl+mouse wheel | Icon size |
+| Alt+P / Alt+Shift+P | Inspector / its details |
 | Alt+Enter | Properties |
+| F11 | Full screen |
+| Ctrl+H | Show hidden files |
+| Ctrl+B | Bookmark folder |
+| Ctrl+Shift+V | Paste with TeraCopy |
+| Ctrl+\ / Ctrl+Shift+\ / Ctrl+F6 | Split side by side / stacked / switch pane |
 | Ctrl+, | Settings |

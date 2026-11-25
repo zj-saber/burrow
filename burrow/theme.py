@@ -59,8 +59,59 @@ _PRIMARY = {
     },
 }
 
-PALETTES = {"burrow": _BURROW, "primary": _PRIMARY}
-PALETTE_NAMES = {"burrow": "Burrow (cool blue)", "primary": "Primary (warm, inspired by the Obsidian theme)"}
+_GREYSCALE = {   # no hue at all: only lightness separates things
+    "light": {
+        "window": "#f2f2f2", "base": "#ffffff", "panel": "#f2f2f2", "text": "#1f1f1f",
+        "dim": "#6e6e6e", "border": "#e0e0e0", "accent": "#5c5c5c", "select": "#dcdcdc",
+        "select_inactive": "#e8e8e8", "hover": "#f4f4f4", "chip": "#e6e6e6", "seltext": "#000000",
+    },
+    "dark": {
+        "window": "#1c1c1c", "base": "#161616", "panel": "#1c1c1c", "text": "#e2e2e2",
+        "dim": "#8c8c8c", "border": "#2c2c2c", "accent": "#a8a8a8", "select": "#3a3a3a",
+        "select_inactive": "#2e2e2e", "hover": "#222222", "chip": "#262626", "seltext": "#ffffff",
+    },
+}
+
+_SEPIA = {       # old paper and ink
+    "light": {
+        "window": "#ede0c8", "base": "#f6ecd9", "panel": "#ede0c8", "text": "#4a3720",
+        "dim": "#85704f", "border": "#dfcfae", "accent": "#a0703c", "select": "#e3cfa6",
+        "select_inactive": "#eadcc0", "hover": "#f1e5cd", "chip": "#e6d6b8", "seltext": "#2f2111",
+    },
+    "dark": {
+        "window": "#2a2218", "base": "#30271c", "panel": "#2a2218", "text": "#e3d3b5",
+        "dim": "#a99572", "border": "#3e3324", "accent": "#c49a5e", "select": "#55442c",
+        "select_inactive": "#403424", "hover": "#372d20", "chip": "#3e3324", "seltext": "#f5e8cf",
+    },
+}
+
+_OLED = {        # true black: pixels off on OLED screens, so it's dark whatever the Theme says
+    "dark": {
+        "window": "#000000", "base": "#000000", "panel": "#000000", "text": "#d8d8d8",
+        "dim": "#7a7a7a", "border": "#1a1a1a", "accent": "#5b8cff", "select": "#16264a",
+        "select_inactive": "#141a26", "hover": "#0c0c0c", "chip": "#111111", "seltext": "#ffffff",
+    },
+    "only": "dark",
+}
+
+_CALM = {        # easy on the eyes: low contrast, little blue light, soft sage accent
+    "light": {
+        "window": "#e9ece4", "base": "#f3f4ee", "panel": "#e9ece4", "text": "#3c4a40",
+        "dim": "#748278", "border": "#d9ded2", "accent": "#6f9a7c", "select": "#d3e0d1",
+        "select_inactive": "#e0e6dc", "hover": "#edf0e8", "chip": "#e1e5da", "seltext": "#24322a",
+    },
+    "dark": {
+        "window": "#1f2421", "base": "#232925", "panel": "#1f2421", "text": "#c5cfc5",
+        "dim": "#879387", "border": "#2f3732", "accent": "#7fa88a", "select": "#34473a",
+        "select_inactive": "#2c352f", "hover": "#28302b", "chip": "#2b322d", "seltext": "#e4ece3",
+    },
+}
+
+PALETTES = {"burrow": _BURROW, "primary": _PRIMARY, "greyscale": _GREYSCALE, "sepia": _SEPIA,
+            "oled": _OLED, "calm": _CALM}
+PALETTE_NAMES = {"burrow": "Burrow (cool blue)", "primary": "Primary (warm, inspired by the Obsidian theme)",
+                 "greyscale": "Greyscale", "sepia": "Sepia", "oled": "OLED black (always dark)",
+                 "calm": "Calm (easy on the eyes)"}
 THEMES = _BURROW                       # kept for callers that only need the default palette
 
 _current: dict = dict(_BURROW["light"], name="light", palette="burrow")
@@ -111,8 +162,8 @@ def _palette(c: dict) -> QPalette:
 
 def apply(app, mode: str, palette: str = "burrow") -> dict:
     global _current, _default_font
-    name = resolve(mode)
     pal = PALETTES.get(palette, _BURROW)
+    name = pal.get("only") or resolve(mode)
     _current = dict(pal[name], name=name, palette=palette if palette in PALETTES else "burrow")
     if app.style().name().lower() != "fusion":
         app.setStyle("Fusion")
