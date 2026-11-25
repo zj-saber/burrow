@@ -103,6 +103,8 @@ DEFAULTS = {
     "sidebar_network": True,
     "single_instance": True,        # later launches open as tabs
     "quick_access_sync": True,      # bookmarks pinned/unpinned in Explorer Quick Access
+    "win_e": False,                 # Win+E opens Burrow (keyboard hook while Burrow runs)
+    "run_in_background": False,     # tray icon, start with Windows, closing hides
     "show_menubar": False,
     "bookmarks": [],
     "recent_servers": [],
@@ -142,7 +144,7 @@ class Config(QObject):
     # ----- persistence -------------------------------------------------
     def _load(self):
         try:
-            loaded = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            loaded = json.loads(CONFIG_FILE.read_text(encoding="utf-8-sig"))   # tolerate a BOM (e.g. edited in PowerShell)
         except (OSError, ValueError):
             return
         if not isinstance(loaded, dict):

@@ -117,6 +117,8 @@ class MainWindow(QMainWindow):
         self.inspector_timer.timeout.connect(self._update_inspector)
         self._feature_key = tuple(config.get(k) for k in self.FEATURE_KEYS)
         self.apply_feature_switches()
+        self._bg_key = (config.get("win_e"), config.get("run_in_background"))
+        self.apply_background_switches()
 
         config.settingsChanged.connect(self._settings_changed)
         config.viewChanged.connect(lambda _src: self._sync_preset_combo())
@@ -195,7 +197,7 @@ class MainWindow(QMainWindow):
         self.act_settings = A("Settings…", self.open_settings, "Ctrl+,", tip="Settings (Ctrl+,)")
         self.act_terminal = A("Open terminal here", self.open_terminal)
         self.act_explorer = A("Show in Explorer", self.show_in_explorer)
-        self.act_quit = A("Exit", self.close, "Ctrl+Q")
+        self.act_quit = A("Exit", lambda: self.quit_for_real(), "Ctrl+Q")
 
         T = lambda *a, **k: self._action(*a, tree=True, **k)  # noqa: E731
         self.act_open = T("Open", lambda: self.view().open_entries(self.view().selected_entries()))
@@ -370,7 +372,7 @@ class MainWindow(QMainWindow):
         self.bookmarks_menu.aboutToShow.connect(self._fill_bookmarks_menu)
         t = mb.addMenu("&Tools")
         t.aboutToShow.connect(lambda: (self.act_default_fm.setChecked(integration.is_default()),
-                                       self.act_win_e.setChecked(integration.is_win_e())))
+                                       self.act_win_e.setChecked(bool(self.config.get("win_e")))))
         for a in (self.act_terminal, self.act_explorer, self.act_properties, None,
                   self.act_map_drive, self.act_unmap_drive, None, self.act_default_fm, self.act_win_e, None, self.act_settings):
             t.addSeparator() if a is None else t.addAction(a)
@@ -654,6 +656,10 @@ class MainWindow(QMainWindow):
         self.act_hidden.setChecked(self.config.get("show_hidden"))
         if (self.config.get("theme"), theme.resolve(self.config.get("theme")), self.config.get("palette")) != self._theme_key:
             self.apply_theme()
+        bg = (self.config.get("win_e"), self.config.get("run_in_background"))
+        if bg != getattr(self, "_bg_key", None):
+            self._bg_key = bg
+            self.apply_background_switches()
         feats = tuple(self.config.get(k) for k in self.FEATURE_KEYS)
         if feats != getattr(self, "_feature_key", None):
             self._feature_key = feats
@@ -1042,7 +1048,7 @@ class MainWindow(QMainWindow):
 
     def open_external(self, args: list):
         """Paths from another launch (a folder opened in Windows, Win+E, a second Burrow)."""
-        if not args:
+        if not args and self.isVisible() and not self.isMinimized():
             self.new_tab()
         for a in args:
             if places.is_unc(a) or os.path.isdir(a):
@@ -1059,12 +1065,59 @@ class MainWindow(QMainWindow):
         self.activateWindow()
 
     def toggle_win_e(self, on: bool):
-        err = integration.set_win_e(on)
-        if err:
-            QMessageBox.warning(self, "Win+E", f"Couldn't change the setting: {err}")
-        self.act_win_e.setChecked(integration.is_win_e())
-        self.statusBar().showMessage("Win+E now opens Burrow" if integration.is_win_e()
-                                     else "Win+E opens Explorer again", 5000)
+        self.config.set("win_e", on)
+        self.statusBar().showMessage("Win+E now opens Burrow" if on else "Win+E opens Explorer again", 5000)
+
+    # ----- Win+E and background mode -------------------------------------------------------
+    def apply_background_switches(self):
+        """Win+E hook and tray/background mode follow their Settings switches."""
+        from .hotkey import WinEHook, set_start_with_windows, starts_with_windows
+        if not hasattr(self, "win_e_hook"):
+            self.win_e_hook = WinEHook(self)
+            self.win_e_hook.pressed.connect(self._win_e_pressed)
+        if self.config.get("win_e"):
+            if not self.win_e_hook.install():
+                self.statusBar().showMessage("Couldn't listen for Win+E", 6000)
+        else:
+            self.win_e_hook.uninstall()
+        bg = bool(self.config.get("run_in_background"))
+        if bg != starts_with_windows():
+            set_start_with_windows(bg, integration.launch_command())
+        if bg and getattr(self, "tray", None) is None:
+            from PySide6.QtWidgets import QSystemTrayIcon
+            self.tray = QSystemTrayIcon(self.windowIcon(), self)
+            self.tray.setToolTip("Burrow")
+            menu = QMenu(self)
+            menu.addAction("Open Burrow").triggered.connect(lambda: self.bring_to_front())
+            menu.addAction("New tab").triggered.connect(lambda: (self.new_tab(), self.bring_to_front()))
+            menu.addSeparator()
+            menu.addAction("Quit Burrow").triggered.connect(self.quit_for_real)
+            self.tray.setContextMenu(menu)
+            self.tray.activated.connect(lambda reason: reason == QSystemTrayIcon.ActivationReason.Trigger
+                                        and self.bring_to_front())
+            self.tray.show()
+        elif not bg and getattr(self, "tray", None) is not None:
+            self.tray.hide()
+            self.tray.deleteLater()
+            self.tray = None
+
+    def _win_e_pressed(self):
+        if self.isVisible() and not self.isMinimized():
+            self.new_tab()
+        self.bring_to_front()
+
+    def bring_to_front(self):
+        if self.isMinimized():
+            self.showNormal()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        if sys.platform == "win32":
+            ctypes.windll.user32.SetForegroundWindow(int(self.winId()))
+
+    def quit_for_real(self):
+        self._really_quit = True
+        self.close()
 
     def apply_feature_switches(self):
         """Push the Settings feature switches into the parts that use them."""
@@ -1139,6 +1192,11 @@ class MainWindow(QMainWindow):
 
     # ----- shutdown --------------------------------------------------------------------------
     def closeEvent(self, ev):
+        if self.config.get("run_in_background") and not getattr(self, "_really_quit", False):
+            self.hide()                    # keep running in the tray (Win+E, quick reopen)
+            ev.ignore()
+            self._save_session()
+            return
         if self.jobs:
             if QMessageBox.question(self, APP_NAME, "A copy is still running. Cancel it and quit?") \
                     != QMessageBox.StandardButton.Yes:
@@ -1146,12 +1204,18 @@ class MainWindow(QMainWindow):
                 return
             for j in list(self.jobs):
                 j.cancel_and_wait()
+        self._save_session()
+        if getattr(self, "win_e_hook", None) is not None:
+            self.win_e_hook.uninstall()
+        super().closeEvent(ev)
+        QApplication.instance().quit()
+
+    def _save_session(self):
         self.config.data["session_tabs"] = [v.path for v in self.views()]
         self.config.data["session_current"] = self.tabs.currentIndex()
         self.config.data["window_geometry"] = bytes(self.saveGeometry().toHex().data()).decode()
         self.config.data["window_state"] = bytes(self.saveState().toHex().data()).decode()
         self.config.save()
-        super().closeEvent(ev)
 
 
 def main():
@@ -1182,5 +1246,7 @@ def main():
     for a in args:                        # a file on the command line: open its folder, select it
         if os.path.isfile(a):
             win.open_external([os.path.abspath(a)])
-    win.show()
+    if "--background" not in sys.argv or not config.get("run_in_background"):
+        win.show()
+    app.setQuitOnLastWindowClosed(not config.get("run_in_background"))
     return app.exec()

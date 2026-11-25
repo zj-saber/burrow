@@ -231,12 +231,14 @@ class SettingsDialog(QDialog):
         f = QFormLayout(win)
         self.default_fm = QCheckBox("Open folders and drives in Burrow")
         self.default_fm.setChecked(integration.is_default())
-        self.win_e = QCheckBox("Open Burrow with Win+E")
-        self.win_e.setChecked(integration.is_win_e())
-        self._default_was, self._win_e_was = self.default_fm.isChecked(), self.win_e.isChecked()
+        self._default_was = self.default_fm.isChecked()
         f.addRow(self.default_fm)
         f.addRow(note("Desktop, Explorer, the Run box, shortcuts and apps that open a folder go to Burrow, as tabs."))
-        f.addRow(self.win_e)
+        f.addRow(check("win_e", "Open Burrow with Win+E",
+                       "Burrow catches Win+E while it runs, so Explorer doesn't open."))
+        f.addRow(check("run_in_background", "Keep Burrow running in the background and start it with Windows",
+                       "A tray icon keeps Burrow ready, so Win+E always works. Closing the window hides it; "
+                       "quit from the tray icon or File ▸ Exit."))
         f.addRow(check("quick_access_sync", "Mirror bookmarks to Explorer Quick Access",
                        "Adding or removing a bookmark pins or unpins the folder in Explorer."))
         f.addRow(note("Folder colors set in Burrow are always written so Explorer shows them too. "
@@ -314,8 +316,7 @@ class SettingsDialog(QDialog):
 
     def _save(self):
         from . import integration
-        for box, was, fn, label in ((self.default_fm, self._default_was, integration.set_default, "Open folders in Burrow"),
-                                    (self.win_e, self._win_e_was, integration.set_win_e, "Win+E")):
+        for box, was, fn, label in ((self.default_fm, self._default_was, integration.set_default, "Open folders in Burrow"),):
             if box.isChecked() != was:
                 err = fn(box.isChecked())
                 if err:

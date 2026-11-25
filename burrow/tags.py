@@ -57,7 +57,7 @@ class TagStore(QObject):
     # ----- persistence --------------------------------------------------------------------
     def _load(self):
         try:
-            data = json.loads(TAGS_FILE.read_text(encoding="utf-8"))
+            data = json.loads(TAGS_FILE.read_text(encoding="utf-8-sig"))
         except (OSError, ValueError):
             return
         for path, tags in (data.get("items") or {}).items():
