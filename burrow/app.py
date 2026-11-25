@@ -384,8 +384,15 @@ class MainWindow(QMainWindow):
     def _inspector_visibility(self, visible):
         if visible:
             self.inspector_timer.start()
+        elif self.isMinimized() or self.windowState() & Qt.WindowState.WindowMinimized:
+            self.inspector.media.pause()        # minimized: pause, keep the place for later
         else:
-            self.inspector.media.unload()       # don't keep playing in a hidden panel
+            self.inspector.media.unload()       # inspector closed: stop and free the player
+
+    def _seek_pressed(self, direction: int, big: bool) -> bool:
+        if not self.insp_dock.isVisible() or not self.inspector.media.is_active():
+            return False
+        return self.inspector.media.seek_by(direction * (30000 if big else 5000))
 
     def _space_pressed(self) -> bool:
         return self.insp_dock.isVisible() and self.inspector.toggle_media()
@@ -513,6 +520,7 @@ class MainWindow(QMainWindow):
         v.contextMenuRequested.connect(lambda pos, v=v: self._context_menu(v, pos))
         v.tree.dropRequested.connect(self.transfer)
         v.space_handler = self._space_pressed
+        v.seek_handler = self._seek_pressed
         if not v.navigate(path, record=False):
             v.navigate(HOME, record=False)
         idx = self.tabs.currentIndex() + 1 if after_current and self.tabs.count() else self.tabs.count()
@@ -1072,6 +1080,11 @@ class MainWindow(QMainWindow):
 
     def open_settings(self):
         dialogs.SettingsDialog(self.config, self).exec()
+
+    def changeEvent(self, ev):
+        super().changeEvent(ev)
+        if ev.type() == QEvent.Type.WindowStateChange and self.isMinimized():
+            self.inspector.media.pause()         # no decoding while nobody can see it
 
     def showEvent(self, ev):
         super().showEvent(ev)

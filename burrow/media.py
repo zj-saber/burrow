@@ -54,6 +54,15 @@ class MediaPreview(QWidget):
         self._poster_ms = 0
         self._meta_sent = False
         self._path = None
+        self._seek_target = None          # latest requested position while keys are held
+        self._seek_timer = QTimer(self)
+        self._seek_timer.setSingleShot(True)
+        self._seek_timer.setInterval(40)
+        self._seek_timer.timeout.connect(self._apply_seek)
+        self._release_timer = QTimer(self)    # free the decoder soon after leaving a media file
+        self._release_timer.setSingleShot(True)
+        self._release_timer.setInterval(4000)
+        self._release_timer.timeout.connect(self._release)
 
         self.cover = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
         self.cover.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
@@ -130,6 +139,7 @@ class MediaPreview(QWidget):
 
     # ----- public ------------------------------------------------------------------------
     def load(self, path: str, video: bool):
+        self._release_timer.stop()
         self._ensure()
         self.unload()
         self._path = path
@@ -151,7 +161,24 @@ class MediaPreview(QWidget):
             self._player.stop()
             self._player.setSource(QUrl())          # releases the file handle
         self._path = None
+        self._seek_target = None
         self.hide()
+        if self._player is not None:
+            self._release_timer.start()
+
+    def _release(self):
+        """Drop the player, its decoder buffers and the video surface. Recreated in a few ms
+        the next time a media file is previewed (the libraries stay loaded)."""
+        if self._path is not None or self._player is None:
+            return
+        self._player.setVideoOutput(None)
+        for obj in (self._player, self._audio, self._video):
+            obj.deleteLater()
+        self._player = self._audio = self._video = None
+
+    def pause(self):
+        if self._player is not None and self._path is not None:
+            self._player.pause()
 
     def toggle(self):
         if self._player is None or self._path is None:
@@ -164,6 +191,38 @@ class MediaPreview(QWidget):
                 self._at_poster = False
                 self._player.setPosition(0)
             self._player.play()
+
+    def seek_by(self, ms: int) -> bool:
+        """Jump forward/back (arrow keys). Repeats while a key is held are coalesced: the UI
+        moves at once, and the player seeks to the newest target every 40 ms at most."""
+        if self._player is None or self._path is None:
+            return False
+        dur = self._player.duration()
+        if dur <= 0:
+            return True
+        if self._at_poster:
+            self._at_poster = False
+            base = 0
+        else:
+            base = self._seek_target if self._seek_target is not None else self._player.position()
+        target = max(0, min(dur - 250, base + ms))
+        self._seek_target = target
+        self.seek.setValue(target)
+        self.time.setText(f"{fmt_time(target)} / {fmt_time(dur)}")
+        if not self._seek_timer.isActive():
+            self._seek_timer.start()
+        return True
+
+    def _apply_seek(self):
+        if self._player is None or self._seek_target is None:
+            return
+        self._player.setPosition(self._seek_target)
+        # keep the target until the player reports it, so the slider doesn't jump back
+        QTimer.singleShot(120, self._seek_settled)
+
+    def _seek_settled(self):
+        if not self._seek_timer.isActive():
+            self._seek_target = None
 
     def is_active(self) -> bool:
         return self._path is not None
@@ -194,8 +253,8 @@ class MediaPreview(QWidget):
             self._player.setPosition(ms)
 
     def _on_position(self, ms):
-        if self._at_poster or self._poster_pending:
-            return                              # keep showing 0:00 while parked on the poster
+        if self._at_poster or self._poster_pending or self._seek_target is not None:
+            return                              # parked on the poster, or a key seek is in flight
         if not self.seek.isSliderDown():
             self.seek.setValue(ms)
         self.time.setText(f"{fmt_time(ms)} / {fmt_time(self._player.duration())}")

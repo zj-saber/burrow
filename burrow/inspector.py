@@ -15,7 +15,10 @@ from .zoomview import ZoomView
 from .media import AUDIO_EXTS, VIDEO_EXTS, MediaPreview
 from .model import CLOUD_ONLY, DRIVES, NETWORK, Entry, attr_string, human_size, icon_cache
 
-TEXT_EXTS = set("""txt md markdown log ini cfg conf toml yaml yml json jsonc xml html htm css scss less
+TEXT_EXTS = set("""txt text md markdown mdx rst adoc org log ini cfg conf config toml yaml yml json jsonc json5
+ndjson geojson xml xaml svg plist html htm xhtml css scss sass less csv tsv tab nfo diz srt vtt ass ssa sub lrc cue
+m3u m3u8 pls tex bib gitconfig gitmodules dockerfile makefile cmake mk gradle sbt tf tfvars hcl nix
+ps1xml lock sum mod workspace sln csproj vcxproj props targets manifest desktop service url
 js mjs cjs ts tsx jsx py pyw pyi c h cpp hpp cc cs java kt kts go rs rb php pl lua sh bash zsh ps1
 psm1 psd1 bat cmd sql csv tsv env gitignore gitattributes editorconfig properties gradle swift m mm
 r dart vue svelte tex rst srt vtt nfo reg inf diff patch""".split())
@@ -99,6 +102,7 @@ class Inspector(QWidget):
 
     # ----- helpers -------------------------------------------------------------
     use_everything = True
+    _hl = None
     _shown = None
 
     def _reset(self):
@@ -168,6 +172,11 @@ class Inspector(QWidget):
 
     # ----- public ---------------------------------------------------------------
     def show_entries(self, entries: list[Entry], folder: str | None):
+        # Same single file still selected (window restored, folder refreshed...): keep the
+        # playing video / zoomed photo exactly as it is instead of reloading it.
+        if len(entries) == 1 and ((self.media.is_active() and self.media._path == entries[0].path)
+                                  or (self.zoom.kind and self.zoom.path == entries[0].path)):
+            return
         self._reset()
         icons = icon_cache()
         if not entries:
@@ -302,7 +311,8 @@ class Inspector(QWidget):
             self._preview_archive(e)
         elif e.ext in VIDEO_EXTS or e.ext in AUDIO_EXTS:
             self._preview_media(e)
-        elif e.ext in TEXT_EXTS or (e.ext not in BINARY_EXTS and (e.size or 0) <= 4 * 1024 * 1024):
+        elif e.ext in TEXT_EXTS or e.ext not in BINARY_EXTS:
+            # any size: only the first 256 KB is read, and binary content is detected
             self._preview_text(e)
 
     def _preview_archive(self, e: Entry):
@@ -450,4 +460,9 @@ class Inspector(QWidget):
         if (e.size or 0) > TEXT_LIMIT:
             self._set_note(f"Showing the first {human_size(TEXT_LIMIT)}.")
         self.text.setPlainText(text)
+        if self._hl is not None:
+            self._hl.setDocument(None)
+        from .highlight import PreviewHighlighter
+        from . import theme
+        self._hl = PreviewHighlighter(self.text.document(), e.ext, theme.colors())
         self._show_text(True)

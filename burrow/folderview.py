@@ -159,6 +159,11 @@ class FileTree(QTreeView):
         if (ev.key() == Qt.Key.Key_Space and not self.owner.filter_text() and mods == Qt.KeyboardModifier.NoModifier
                 and self.owner.space_handler is not None and self.owner.space_handler()):
             return                                  # Space played/paused the media preview
+        if (ev.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right) and self.owner.seek_handler is not None
+                and not mods & ~Qt.KeyboardModifier.ShiftModifier
+                and self.owner.seek_handler(1 if ev.key() == Qt.Key.Key_Right else -1,
+                                            bool(ev.modifiers() & Qt.KeyboardModifier.ShiftModifier))):
+            return                                  # arrows seek the previewed video/audio
         if ev.key() == Qt.Key.Key_Escape and self.owner.filter_text():
             self.owner.clear_filter()
             return
@@ -249,6 +254,7 @@ class FolderView(QWidget):
         self.applied_version = -1
         self._load_token = 0
         self.space_handler = None          # set by the window: Space plays media previews
+        self.seek_handler = None           # set by the window: Left/Right seek media previews
         self.loading = False
 
         self.model = DirModel(self)
