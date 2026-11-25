@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (QFormLayout, QHeaderView, QLabel, QPlainTextEdit,
 from . import archive, everything, places
 from .zoomview import ZoomView
 from .media import AUDIO_EXTS, VIDEO_EXTS, MediaPreview
+from . import raw
 from .model import CLOUD_ONLY, DRIVES, NETWORK, Entry, attr_string, human_size, icon_cache
 
 TEXT_EXTS = set("""txt text md markdown mdx rst adoc org log ini cfg conf config toml yaml yml json jsonc json5
@@ -22,7 +23,7 @@ ps1xml lock sum mod workspace sln csproj vcxproj props targets manifest desktop 
 js mjs cjs ts tsx jsx py pyw pyi c h cpp hpp cc cs java kt kts go rs rb php pl lua sh bash zsh ps1
 psm1 psd1 bat cmd sql csv tsv env gitignore gitattributes editorconfig properties gradle swift m mm
 r dart vue svelte tex rst srt vtt nfo reg inf diff patch""".split())
-BINARY_EXTS = VIDEO_EXTS | AUDIO_EXTS | set("""exe dll sys msi zip 7z rar gz bz2 xz tar iso img bin dat db sqlite mp3 mp4 mkv
+BINARY_EXTS = VIDEO_EXTS | AUDIO_EXTS | raw.RAW_EXTS | raw.BRAW_EXTS | set("""exe dll sys msi zip 7z rar gz bz2 xz tar iso img bin dat db sqlite mp3 mp4 mkv
 avi mov wav flac ogg m4a pdf doc docx xls xlsx ppt pptx psd ttf otf woff woff2 class jar pyc""".split())
 TEXT_LIMIT = 256 * 1024
 
@@ -108,6 +109,7 @@ class Inspector(QWidget):
     def _reset(self):
         self._shown = None
         self.media.unload()
+        self._raw_req = getattr(self, "_raw_req", 0) + 1
         self._archive_req = getattr(self, "_archive_req", 0) + 1
         self.archive_tree.clear()
         self.zoom.clear()
@@ -303,7 +305,11 @@ class Inspector(QWidget):
         if remote and (e.size or 0) > 512 * 1024:
             self._set_note("Large file on a network location: no automatic preview.")
             return
-        if e.ext == "pdf":
+        if e.ext in raw.RAW_EXTS or (e.ext in raw.SHELL_IMAGE_EXTS and e.ext not in self._img_exts):
+            self._preview_raw(e)          # RAW, or a photo format only Windows can decode (HEIC...)
+        elif e.ext in raw.BRAW_EXTS:
+            self._preview_braw(e)
+        elif e.ext == "pdf":
             self._preview_pdf(e)
         elif e.ext in self._img_exts:
             self._preview_image(e)
@@ -408,6 +414,64 @@ class Inspector(QWidget):
         self.preview.clear()
         self.preview.setFixedHeight(0)
         self._show_zoom(True)
+
+    def _preview_raw(self, e: Entry):
+        """Camera RAW: the embedded full-size JPEG (or Windows' RAW thumbnail), read off-thread."""
+        self._shown = e.path
+        self._raw_req = getattr(self, "_raw_req", 0) + 1
+        req, path = self._raw_req, e.path
+        self._set_note("Reading RAW preview…")
+        places.run_async(lambda: raw.read_raw(path), lambda res: self._raw_ready(path, req, res))
+
+    def _raw_ready(self, path, req, res):
+        if self._shown != path or req != getattr(self, "_raw_req", 0) or not isinstance(res, dict):
+            return
+        self._set_note("")
+        info = res["info"]
+        cam = " ".join(x for x in (info.get("make", ""), info.get("model", "")) if x)
+        if info.get("make") and info.get("model", "").lower().startswith(info["make"].lower()):
+            cam = info["model"]
+        self._row("Camera", cam)
+        self._row("Lens", info.get("lens", ""))
+        shot = "  ·  ".join(x for x in (info.get("exposure"), info.get("aperture"), info.get("iso"), info.get("focal")) if x)
+        self._row("Exposure", shot)
+        taken = info.get("taken", "")
+        if len(taken) >= 16 and taken[4] == ":":
+            taken = taken[:10].replace(":", "-") + taken[10:16]
+        self._row("Taken", taken)
+        img = res["image"]
+        if img.isNull():
+            self._set_note(res["error"])
+            return
+        self._row("Preview", f"{img.width()} × {img.height()} px · "
+                  + ("embedded camera JPEG" if res["source"] == "embedded" else "Windows RAW thumbnail"))
+        self.zoom.load_qimage(img, path)
+        self.preview.clear()
+        self.preview.setFixedHeight(0)
+        self._show_zoom(True)
+
+    def _preview_braw(self, e: Entry):
+        """Blackmagic RAW: clip details only (frames need Blackmagic's own decoder)."""
+        self._shown = e.path
+        path = e.path
+        places.run_async(lambda: raw.braw_info(path), lambda res: self._braw_ready(path, res))
+
+    def _braw_ready(self, path, res):
+        if self._shown != path or not isinstance(res, dict):
+            return
+        if res.get("error"):
+            self._set_note(res["error"])
+            return
+        from .media import fmt_time
+        vid = res.get("resolution", "")
+        if res.get("fps"):
+            vid += f" @ {res['fps']:.3g} fps"
+        self._row("Video", vid)
+        if res.get("duration_s"):
+            self._row("Duration", fmt_time(int(res["duration_s"] * 1000)))
+        self._row("Codec", "Blackmagic RAW" + (f" ({res['codec']})" if res.get("codec") else ""))
+        self._set_note("Blackmagic RAW frames can't be previewed here: they need Blackmagic's own decoder. "
+                       "Double-click opens the clip in Blackmagic RAW Player.")
 
     def _preview_pdf(self, e: Entry):
         try:

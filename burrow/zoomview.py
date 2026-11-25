@@ -172,6 +172,20 @@ class ZoomView(QWidget):
         QTimer.singleShot(0, self.fit)
         return info
 
+    def load_qimage(self, img, path: str):
+        """Show an already-decoded image (e.g. a RAW file's embedded preview), full size."""
+        self.clear()
+        if img is None or img.isNull():
+            return
+        self.path, self.kind = path, "image"
+        self._src_size = img.size()
+        self._pix_scale = 1.0
+        self._full_loaded = True
+        self._set_pixmap(QPixmap.fromImage(img))
+        self._sync_controls()
+        self.show()
+        QTimer.singleShot(0, self.fit)
+
     def load_pdf(self, path: str) -> dict:
         self.clear()
         from PySide6.QtPdf import QPdfDocument
@@ -196,7 +210,10 @@ class ZoomView(QWidget):
             self.load_pdf(other.path)
             self.go_page(other.page)
         elif other.kind == "image":
-            self.load_image(other.path)
+            if other._full_loaded and other._pix_scale == 1.0 and not other.item.pixmap().isNull():
+                self.load_qimage(other.item.pixmap().toImage(), other.path)   # e.g. a RAW preview
+            else:
+                self.load_image(other.path)
 
     def aspect(self) -> float:
         """height / width of the image or current page."""
