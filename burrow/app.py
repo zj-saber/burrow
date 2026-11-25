@@ -223,6 +223,48 @@ class DropArea(QWidget):
         QTimer.singleShot(0, lambda: self.win.snap_tab(host.pane, index, zone[0], zone[1]))
 
 
+def _drives_changed():
+    """A drive, card, phone or network drive came or went: update sidebars and This PC pages."""
+    for w in WINDOWS:
+        w.sidebar._check_drives()
+        for v in w.views():
+            if v.path == DRIVES and v.isVisible():
+                v.refresh()
+
+
+_trim_timer = None
+
+
+def schedule_trim(delay_ms: int = 3000):
+    """Burrow went to the tray: once it has settled, give memory back to Windows."""
+    global _trim_timer
+    if _trim_timer is None:
+        _trim_timer = QTimer()
+        _trim_timer.setSingleShot(True)
+        _trim_timer.timeout.connect(trim_memory)
+    _trim_timer.start(delay_ms)
+
+
+def trim_memory():
+    if any(w.isVisible() for w in WINDOWS):
+        return                                   # came back meanwhile
+    import gc
+    from PySide6.QtGui import QPixmapCache
+    for w in WINDOWS:
+        insp = w.inspector
+        insp._reset()                            # drop the previewed photo/PDF/book/archive
+        insp.media._release()                    # video player, decoder buffers, video surface
+        w._trimmed = True
+    icon_cache().trim()
+    QPixmapCache.clear()
+    gc.collect()
+    if sys.platform == "win32":                  # hand the now-unused pages back to Windows
+        k32 = ctypes.windll.kernel32
+        k32.GetCurrentProcess.restype = ctypes.c_void_p
+        k32.SetProcessWorkingSetSize.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t]
+        k32.SetProcessWorkingSetSize(k32.GetCurrentProcess(), ctypes.c_size_t(-1).value, ctypes.c_size_t(-1).value)
+
+
 def open_new_window(config, paths=None):
     """Ctrl+N / Win+E: another Burrow window (same settings, its own tabs)."""
     w = MainWindow(config, paths or [config.get("new_tab_path") or HOME], primary=False)
@@ -1188,7 +1230,7 @@ class MainWindow(QMainWindow):
         if c.get("shortcut_scheme") != getattr(self, "_scheme", None):
             self._scheme = c.get("shortcut_scheme")
             self.apply_shortcuts()
-            self.sidebar.rebuild()                 # the bookmarks hint names the key
+            self.sidebar.rebuild_soon()            # the bookmarks hint names the key
         self._sync_sort_mode()
 
     def _view_preset_changed(self, _src=None):
@@ -1718,7 +1760,7 @@ class MainWindow(QMainWindow):
         self.inspector.prefs = {k: bool(c.get(k)) for k in (
             "preview_images", "preview_media", "preview_text", "text_syntax_colors", "preview_archives",
             "preview_epub")}
-        self.sidebar.rebuild()
+        self.sidebar.rebuild_soon()
         for v in self.views():
             v.tree.viewport().update()
         self.inspector_timer.start()
@@ -1772,6 +1814,9 @@ class MainWindow(QMainWindow):
     def showEvent(self, ev):
         super().showEvent(ev)
         self._native_backdrop()
+        if getattr(self, "_trimmed", False):    # back from the tray: refill the dropped preview
+            self._trimmed = False
+            self.inspector_timer.start()
         if not self._docks_sized:              # first run: sensible panel widths (needs a shown window)
             self._docks_sized = True
             self.resizeDocks([self.side_dock, self.insp_dock], [230, 320], Qt.Orientation.Horizontal)
@@ -1780,6 +1825,7 @@ class MainWindow(QMainWindow):
     def changeEvent(self, ev):
         super().changeEvent(ev)
         if ev.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
+            self.sidebar._check_drives()       # cheap; catches anything missed while away
             if self in LAST_ACTIVE:
                 LAST_ACTIVE.remove(self)
             LAST_ACTIVE.append(self)
@@ -1800,10 +1846,12 @@ class MainWindow(QMainWindow):
         if others and not getattr(self, "_really_quit", False):
             self._save_session()             # the primary window hosts Win+E / tray: hide it
             self.hide()
+            schedule_trim()
             ev.ignore()
             return
         if self.config.get("run_in_background") and not getattr(self, "_really_quit", False):
             self.hide()                    # keep running in the tray (Win+E, quick reopen)
+            schedule_trim()
             ev.ignore()
             self._save_session()
             return
@@ -1861,5 +1909,10 @@ def main():
             win.open_external([os.path.abspath(a)])
     if "--background" not in sys.argv or not config.get("run_in_background"):
         win.show()
+    else:
+        schedule_trim()                    # started hidden in the tray
     app.setQuitOnLastWindowClosed(not config.get("run_in_background"))
+    from .devwatch import DeviceWatcher
+    app._devwatch = DeviceWatcher(app)
+    app._devwatch.changed.connect(_drives_changed)
     return app.exec()

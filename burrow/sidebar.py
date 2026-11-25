@@ -118,7 +118,9 @@ class Sidebar(QTreeWidget):
         self._drive_sig = None
         self._current = None
         self._timer = QTimer(self)
-        self._timer.setInterval(4000)
+        # Drives arriving/leaving come from DeviceWatcher (no polling). This slow check only
+        # catches the rare change Windows doesn't broadcast, and only while the sidebar shows.
+        self._timer.setInterval(30000)
         self._timer.timeout.connect(self._check_drives)
         self._timer.start()
         self.rebuild()
@@ -251,6 +253,16 @@ class Sidebar(QTreeWidget):
             bottom = self.visualItemRect(tail).bottom()
         return None, bottom
 
+    def rebuild_soon(self):
+        """Coalesce rebuilds asked for in one go (startup, theme + switches)."""
+        if not getattr(self, "_rebuild_pending", False):
+            self._rebuild_pending = True
+            QTimer.singleShot(0, self._do_rebuild)
+
+    def _do_rebuild(self):
+        self._rebuild_pending = False
+        self.rebuild()
+
     def apply_theme(self, c: dict):
         self.setStyleSheet(theme.sidebar_qss(c))
         self._delegate.select = QColor(c["select"])
@@ -260,7 +272,15 @@ class Sidebar(QTreeWidget):
         for g in (QPalette.ColorGroup.Active, QPalette.ColorGroup.Inactive):
             pal.setColor(g, QPalette.ColorRole.Highlight, QColor(0, 0, 0, 0))
         self.setPalette(pal)
-        self.rebuild()
+        self.rebuild_soon()
+
+    def showEvent(self, ev):
+        super().showEvent(ev)
+        self._timer.start()
+
+    def hideEvent(self, ev):
+        super().hideEvent(ev)
+        self._timer.stop()                 # hidden in the tray: no wake-ups at all
 
     def _check_drives(self):
         if self._signature() != getattr(self, "_sig", None):

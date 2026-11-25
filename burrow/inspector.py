@@ -11,7 +11,6 @@ from PySide6.QtWidgets import (QFormLayout, QHeaderView, QLabel, QPlainTextEdit,
                                QWidget)
 
 from . import archive, everything, places
-from .zoomview import ZoomView
 from .media import AUDIO_EXTS, VIDEO_EXTS, MediaPreview
 from . import raw
 from .model import CLOUD_ONLY, DRIVES, NETWORK, Entry, attr_string, human_size, icon_cache
@@ -106,9 +105,7 @@ class Inspector(QWidget):
         self.media.coverShown.connect(lambda: (self.preview.clear(), self.preview.setFixedHeight(0)))
         self.lay.addWidget(self.preview)
         self.stage_lay.addWidget(self.media, 1)
-        self.zoom = ZoomView(self)
-        self.zoom.popOutRequested.connect(self._pop_out)
-        self.stage_lay.addWidget(self.zoom, 1)
+        self._zoom = None          # photo/PDF viewer: built the first time one is previewed
         self.lay.addWidget(self.title)
         # "Details" header: folds the file information away to give the preview more room
         from PySide6.QtWidgets import QToolButton
@@ -131,13 +128,32 @@ class Inspector(QWidget):
         self.archive_tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.archive_tree.hide()
         self.lay.addWidget(self.archive_tree, 0)
-        from .epub import EpubReader
-        self.epub = EpubReader(self)
-        self.epub.popOutRequested.connect(self._pop_out_epub)
-        self.epub.hide()
-        self.lay.addWidget(self.epub, 0)
+        self._epub = None          # EPUB reader: built the first time a book is previewed
         self.lay.addStretch(1)
-        self._stretch_index = self.lay.count() - 1
+
+    @property
+    def _stretch_index(self) -> int:
+        return self.lay.count() - 1
+
+    @property
+    def zoom(self):
+        if self._zoom is None:
+            from .zoomview import ZoomView
+            self._zoom = ZoomView(self)
+            self._zoom.popOutRequested.connect(self._pop_out)
+            self._zoom.hide()
+            self.stage_lay.addWidget(self._zoom, 1)
+        return self._zoom
+
+    @property
+    def epub(self):
+        if self._epub is None:
+            from .epub import EpubReader
+            self._epub = EpubReader(self)
+            self._epub.popOutRequested.connect(self._pop_out_epub)
+            self._epub.hide()
+            self.lay.insertWidget(self.lay.indexOf(self.archive_tree) + 1, self._epub, 0)
+        return self._epub
 
     # ----- helpers -------------------------------------------------------------
     use_everything = True
@@ -160,10 +176,12 @@ class Inspector(QWidget):
         self._raw_req = getattr(self, "_raw_req", 0) + 1
         self._archive_req = getattr(self, "_archive_req", 0) + 1
         self.archive_tree.clear()
-        self.epub.clear()
+        if self._epub is not None:
+            self._epub.clear()
+            self.lay.setStretchFactor(self._epub, 0)
         self._epub_req = getattr(self, "_epub_req", 0) + 1
-        self.lay.setStretchFactor(self.epub, 0)
-        self.zoom.clear()
+        if self._zoom is not None:
+            self._zoom.clear()
         self._show_zoom(False)
         self._show_archive(False)
         while self.form.rowCount():
@@ -228,7 +246,7 @@ class Inspector(QWidget):
         # Same single file still selected (window restored, folder refreshed...): keep the
         # playing video / zoomed photo exactly as it is instead of reloading it.
         if len(entries) == 1 and ((self.media.is_active() and self.media._path == entries[0].path)
-                                  or (self.zoom.kind and self.zoom.path == entries[0].path)):
+                                  or (self._zoom is not None and self._zoom.kind and self._zoom.path == entries[0].path)):
             return
         self._reset()
         icons = icon_cache()
@@ -522,7 +540,7 @@ class Inspector(QWidget):
             self.lay.setStretch(self._stretch_index, 0)
 
     def _pop_out_epub(self):
-        if self.epub.book:
+        if self._epub is not None and self._epub.book:
             import os
             from .epub import EpubWindow
             EpubWindow(self.epub, os.path.basename(self.epub.book), self.window()).show()
@@ -602,12 +620,13 @@ class Inspector(QWidget):
         self._show_zoom(True)
 
     def _show_zoom(self, on: bool):
-        self.zoom.setVisible(on)
+        if on or self._zoom is not None:
+            self.zoom.setVisible(on)
         self.update_stage()
 
     def update_stage(self):
         """Show the stage (with the user's height) when there's a photo/PDF/video to show."""
-        busy = not self.zoom.isHidden() or not self.media.isHidden()
+        busy = (self._zoom is not None and not self._zoom.isHidden()) or not self.media.isHidden()
         was = not self.stage.isHidden()
         self.stage.setVisible(busy)
         if busy and not was:
@@ -634,7 +653,7 @@ class Inspector(QWidget):
             self.splitChanged.emit(self.split_ratio)
 
     def _pop_out(self):
-        if self.zoom.kind:
+        if self._zoom is not None and self._zoom.kind:
             import os
             from .zoomview import ViewerWindow
             ViewerWindow(self.zoom, os.path.basename(self.zoom.path), self.window()).show()

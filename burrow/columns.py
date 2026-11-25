@@ -45,6 +45,8 @@ class ColumnsView(QColumnView):
     fileChosen = Signal(str)          # a file is selected: its folder is the tab's folder
     openRequested = Signal(list)      # Enter / double-click on files
     contextMenu = Signal(object)      # pos in viewport coordinates
+    extra_actions: tuple = ()         # the window's file actions (set per view); createColumn runs
+                                      # during setModel, before __init__ finishes
 
     def __init__(self, show_hidden: bool, row_height: int = 24, parent=None):
         super().__init__(parent)
@@ -70,7 +72,6 @@ class ColumnsView(QColumnView):
         self.activated.connect(self._activated)
         self.selectionModel().currentChanged.connect(self._current_changed)
         self._quiet = False
-        self.extra_actions = []          # the window's file actions, added to every column
 
     def createColumn(self, index):
         col = super().createColumn(index)       # each column is its own list: route its menu here

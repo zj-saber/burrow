@@ -119,11 +119,26 @@ class IconCache:
         self.provider = QFileIconProvider()
         self.folder = self.provider.icon(QFileIconProvider.IconType.Folder)
         self.file = self.provider.icon(QFileIconProvider.IconType.File)
-        self.drive = self.provider.icon(QFileIconProvider.IconType.Drive)
-        self.computer = self.provider.icon(QFileIconProvider.IconType.Computer)
-        self.network = self.provider.icon(QFileIconProvider.IconType.Network)
         self._icons: dict = {}
         self._types: dict = {}
+
+    @property
+    def drive(self):
+        return self._lazy("drive", QFileIconProvider.IconType.Drive)
+
+    @property
+    def computer(self):
+        return self._lazy("computer", QFileIconProvider.IconType.Computer)
+
+    @property
+    def network(self):
+        return self._lazy("network", QFileIconProvider.IconType.Network)
+
+    def _lazy(self, key, kind):
+        ic = self._icons.get(("std", key))
+        if ic is None:
+            ic = self._icons[("std", key)] = self.provider.icon(kind)
+        return ic
 
     def icon(self, e: Entry):
         if e.kind in ("network", "server", "share"):
@@ -193,6 +208,11 @@ class IconCache:
                 ic = QIcon(file)
                 return ic if not ic.isNull() else None
         return None
+
+    def trim(self):
+        """Forget per-file icons (exe/lnk...) and custom folder icons; type icons stay."""
+        for k in [k for k in self._icons if k[0] in ("path", "dir")]:
+            del self._icons[k]
 
     def forget_folder_icons(self):
         """Drop cached folder icons (after a manual refresh, so recolored folders update)."""
