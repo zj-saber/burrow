@@ -56,8 +56,11 @@ class QuickLook(QDialog):
         self.text.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self.plain = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)    # icon + a line of text
         self.plain.setWordWrap(True)
+        from .officeview import PreviewHost
+        self.host = PreviewHost()                 # Windows' own previewer draws in here
+        self.office = None                        # Burrow's Word / Excel / PowerPoint reader
         self.stack = QStackedWidget()
-        for w in (self.zoom, self.media, self.text, self.plain):
+        for w in (self.zoom, self.media, self.text, self.plain, self.host):
             self.stack.addWidget(w)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(14, 10, 14, 14)
@@ -72,6 +75,8 @@ class QuickLook(QDialog):
         self.entry = e
         self.media.unload()
         self.zoom.clear()
+        self.host.unload()
+        self._drop_office()
         self.setWindowTitle(e.name)
         self.title.setText(e.name)
         self.info.setText("" if e.is_dir or e.size is None else "  " + human_size(e.size))
@@ -98,9 +103,41 @@ class QuickLook(QDialog):
         elif ext in TEXT_EXTS or (ext not in BINARY_EXTS and (e.size or 0) < 4 * 1024 * 1024
                                    and self._looks_text(e.path)):
             self._show_text(e)
-        else:                                     # Word, Excel, PowerPoint, … : Windows' page picture
+        else:                                     # Word, Excel, PowerPoint, Outlook, …
             self._plain(e, "Loading…")
-            self._async(e, lambda p=e.path: raw.shell_thumbnail(p, 1600))
+            QTimer.singleShot(0, lambda req=self._req: self._office(e, req))
+
+    def _office(self, e, req):
+        """Windows' previewer for the type if there is one (Office installed), else Burrow's
+        own reader for .docx / .xlsx / .pptx, else the page picture Windows can make."""
+        if req != self._req:
+            return
+        from . import officeview
+        self.stack.setCurrentWidget(self.host)    # the previewer needs its window on screen
+        if officeview.handler_for(e.ext) and self.host.load(e.path):
+            self.info.setText(self.info.text().split("   ")[0])
+            return
+        if e.ext in officeview.OOXML:
+            def done(res, req=req):
+                if req != self._req:
+                    return
+                if not isinstance(res, dict) or res.get("error"):
+                    self._plain(e, (res.get("error") if isinstance(res, dict) else str(res)) or "Can't read it.")
+                    return
+                self._drop_office()
+                self.office = officeview.build_view(res)
+                self.stack.addWidget(self.office)
+                self.stack.setCurrentWidget(self.office)
+                self.info.setText(self.info.text().split("   ")[0])
+            places.run_async(lambda p=e.path: officeview.read_office(p), done)
+            return
+        self._async(e, lambda p=e.path: raw.shell_thumbnail(p, 1600))
+
+    def _drop_office(self):
+        if self.office is not None:
+            self.stack.removeWidget(self.office)
+            self.office.deleteLater()
+            self.office = None
 
     def _zoom_or_note(self, e, info):
         if info.get("error"):
@@ -212,6 +249,8 @@ class QuickLook(QDialog):
         self._req += 1
         self.media.unload()
         self.zoom.clear()
+        self.host.unload()
+        self._drop_office()
         super().closeEvent(ev)
 
     def place(self):
