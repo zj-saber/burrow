@@ -1482,6 +1482,13 @@ class MainWindow(QMainWindow):
             return
         for mode, b in self.view_buttons.items():
             b.setChecked(mode == v.mode)
+        cols = v.mode == "columns" and v.columns is not None and v.columns.isVisible()
+        if cols and self.insp_dock.isVisible():
+            self._insp_hidden_by_columns = True  # the columns' own preview takes over
+            self.insp_dock.hide()
+        elif not cols and getattr(self, "_insp_hidden_by_columns", False):
+            self._insp_hidden_by_columns = False
+            self.insp_dock.show()
 
     def set_icon_size(self, px: int):
         self.config.set("icon_size", int(px))

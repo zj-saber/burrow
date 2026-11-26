@@ -422,6 +422,7 @@ class FolderView(QWidget):
         self.tree.hover_color = theme.hover_color(c, int(self.config.get("hover_strength")))
         if self.columns is not None:
             self.columns.set_hover_color(self.tree.hover_color)
+            self.columns.preview.apply_theme(c)
         for v in self.item_views()[1:]:
             v.hover_color = self.tree.hover_color
             v.viewport().update()
@@ -630,6 +631,9 @@ class FolderView(QWidget):
             c.newTabRequested.connect(self.openInNewTab.emit)
             c.dropRequested.connect(self.tree.dropRequested.emit)
             c.renameFailed.connect(self._rename_failed)
+            c.preview.apply_theme(theme.colors())
+            c.preview.openRequested.connect(lambda p: self.open_entries(DirModel.fetch_paths([p])))
+            c.preview.quickLookRequested.connect(lambda: self.space_handler is not None and self.space_handler())
             c.horizontalScrollBar().valueChanged.connect(
                 lambda *_: QTimer.singleShot(0, self._sync_results_column))   # after the columns moved
             self._lay.insertWidget(2, c, 1)

@@ -365,6 +365,18 @@ class ColumnsView(QColumnView):
         self.setModel(self.fs)
         self._delegate = _RowDelegate(row_height, self)
         self.setItemDelegate(self._delegate)
+        # the last column previews the selected file (like Finder); Qt shows it for files only
+        from .colpreview import ColumnPreview
+        self.preview = ColumnPreview()
+        self.setPreviewWidget(self.preview)
+        holder = self.preview.parentWidget()     # Qt's preview column is a scroll area: no bars
+        while holder is not None and not isinstance(holder, QAbstractItemView):
+            holder = holder.parentWidget()
+        if holder is not None:
+            holder.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            holder.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            holder.setFrameShape(QFrame.Shape.NoFrame)
+        self.updatePreviewWidget.connect(lambda idx: self.preview.show_path(self.path_of(idx)))
         for col in self.findChildren(QListView):      # the drives column was made in setModel,
             col.setItemDelegate(self._delegate)       # with Qt's delegate (which draws arrows)
         self.setFrameShape(QFrame.Shape.NoFrame)
