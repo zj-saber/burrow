@@ -1550,9 +1550,10 @@ class MainWindow(QMainWindow):
                 m.addAction("Eject").triggered.connect(lambda: self.eject_drive(root))
             if not any(e.is_drive for e in entries):
                 m.addSeparator()
+                # kept short on purpose: Copy/Move to folder and Delete permanently live in
+                # the Edit menu and on Shift+Del
                 for a in (self.act_cut, self.act_copy, self.act_copy_path, None,
-                          self.act_copy_to, self.act_move_to, None,
-                          self.act_rename, self.act_delete, self.act_delete_perm):
+                          self.act_rename, self.act_delete):
                     m.addSeparator() if a is None else m.addAction(a)
                 if self.config.get("context_archive") and not any(places.is_remote(e.path) and
                                                                   places.is_server(e.path) for e in entries):
