@@ -200,6 +200,8 @@ def drive_infos() -> list[dict]:
             info["total"], info["free"] = _disk_space(root)
             if info["label"].lower() == "google drive":
                 info["kind"] = "cloud"
+        from .eject import can_eject
+        info["ejectable"] = can_eject(info)
         out.append(info)
     return out
 

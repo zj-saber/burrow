@@ -250,11 +250,14 @@ class SettingsDialog(QDialog):
         self.view_mode.setCurrentIndex(max(self.view_mode.findData(config.get("view_mode")), 0))
         f.addRow("New tabs open as:", self.view_mode)
         f.addRow(check("ctrl_wheel_icon_size", "Ctrl+mouse wheel changes the icon size"))
+        f.addRow(check("drive_usage_bars", "This PC shows how full each drive is"))
+        f.addRow(check("bulk_rename_f2", "F2 with several items selected opens Bulk rename"))
         bar = QGroupBox("Status bar")
         fb = QFormLayout(bar)
         fb.addRow(check("status_sort_toggle", "Sort switch (folders first / mixed)"))
         fb.addRow(check("status_view_toggle", "View switch (list / columns)"))
         fb.addRow(check("status_icon_slider", "Icon size slider"))
+        fb.addRow(check("status_storage_bar", "Storage pill (how full the drive is)"))
         side = QGroupBox("Sidebar sections")
         f = QFormLayout(side)
         f.addRow(check("sidebar_places", "Places (Home, Desktop, Documents…)"))
@@ -262,6 +265,7 @@ class SettingsDialog(QDialog):
         f.addRow(check("sidebar_tags", "Tags"))
         f.addRow(check("sidebar_network", "Network"))
         f.addRow(check("sidebar_drag_reorder", "Drag section headings to reorder them"))
+        f.addRow(check("sidebar_eject", "Eject buttons next to USB drives, cards, DVDs and network drives"))
         f.addRow(note("Bookmarks and This PC are always shown. Any section can also be collapsed by clicking its heading."))
 
         # ----- Integrations --------------------------------------------------------
@@ -316,8 +320,23 @@ class SettingsDialog(QDialog):
                        if everything.is_running() else
                        "⚠ Everything isn't running. Start it and folder sizes appear automatically."))
 
+        upd = QGroupBox("Updates")
+        f = QFormLayout(upd)
+        f.addRow(check("check_updates", "Check for a new version once a day",
+                       "Asks GitHub for the latest Burrow release. Nothing else is sent."))
+        from . import __version__
+        now = QPushButton("Check now")
+        now.clicked.connect(lambda: (self.parent() and self.parent().check_updates()))
+        row = QHBoxLayout()
+        row.addWidget(QLabel(f"You have Burrow {__version__}."))
+        row.addStretch(1)
+        row.addWidget(now)
+        f.addRow(row)
+        f.addRow(note("When there's a new version, an Update button shows in the status bar. "
+                      "Updating downloads it, restarts Burrow and keeps your settings."))
+
         tabs = QTabWidget()
-        tabs.addTab(page(look, behave), "General")
+        tabs.addTab(page(look, behave, upd), "General")
         tabs.addTab(page(prev), "Preview")
         tabs.addTab(page(lst, bar, side), "Sidebar && list")
         tabs.addTab(page(win, tc_box, ev_box), "Integrations")

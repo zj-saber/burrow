@@ -334,3 +334,25 @@ def inspector_qss(c):
 #inspector QPlainTextEdit {{ background: {c['base']}; border: 1px solid {c['border']}; border-radius: 8px;
                               padding: 4px; color: {c['text']}; }}
 """
+
+
+# ----- skinny storage pill (status bar, This PC) ------------------------------------
+FULL_AT = 0.9                      # turns red past this, like Explorer
+
+
+def paint_usage(p: QPainter, r: QRectF, used: float):
+    """A thin rounded track with the used share filled in the accent (red when nearly full)."""
+    c = _current
+    p.save()
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setPen(Qt.PenStyle.NoPen)
+    rad = r.height() / 2
+    track = QColor(c["dim"])
+    track.setAlpha(60)
+    p.setBrush(track)
+    p.drawRoundedRect(r, rad, rad)
+    used = min(max(used, 0.0), 1.0)
+    if used > 0:
+        p.setBrush(QColor("#e5484d" if used >= FULL_AT else c["accent"]))
+        p.drawRoundedRect(QRectF(r.left(), r.top(), max(r.height(), r.width() * used), r.height()), rad, rad)
+    p.restore()

@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QCompleter, QDockWidget,
 from PySide6.QtCore import QItemSelection, QItemSelectionModel
 
 from . import dialogs, fileops, foldercolor, integration, tags, theme
-from .chrome import AddressArea, TabHost
+from .chrome import AddressArea, TabHost, UsagePill
 from PySide6.QtCore import QPoint, QRect
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QSplitter
@@ -23,10 +23,11 @@ from .config import APP_NAME, Config
 from .folderview import FolderView, display_path, normalize_path, title_for
 from .inspector import Inspector
 from . import places
-from .model import DRIVES, NETWORK, human_size, icon_cache
+from .model import DRIVES, NETWORK, human_size, icon_cache, list_drives
 from .sidebar import Sidebar
 
 HOME = os.path.expanduser("~")
+MAX_PANES = 6                       # snapped panes per window
 
 
 def is_location(p: str) -> bool:
@@ -171,19 +172,20 @@ class DropArea(QWidget):
             r = QRect(tl, p.size())
             if not r.contains(pos):
                 continue
-            if len(self.win.panes) > 1:
-                return ("move", p, r) if p.tabs is not src[0] else None
             fx = (pos.x() - r.left()) / max(1, r.width())
             fy = (pos.y() - r.top()) / max(1, r.height())
             w2, h2 = r.width() // 2, r.height() // 2
-            if fx < 0.3:
+            room = len(self.win.panes) < MAX_PANES
+            if room and fx < 0.25:
                 return ("left", p, QRect(r.left(), r.top(), w2, r.height()))
-            if fx > 0.7:
+            if room and fx > 0.75:
                 return ("right", p, QRect(r.left() + w2, r.top(), r.width() - w2, r.height()))
-            if fy < 0.3:
+            if room and fy < 0.25:
                 return ("top", p, QRect(r.left(), r.top(), r.width(), h2))
-            if fy > 0.7:
+            if room and fy > 0.75:
                 return ("bottom", p, QRect(r.left(), r.top() + h2, r.width(), r.height() - h2))
+            if len(self.win.panes) > 1 and p.tabs is not src[0]:
+                return ("move", p, r)
             return None
         return None
 
@@ -265,6 +267,19 @@ def trim_memory():
         k32.SetProcessWorkingSetSize(k32.GetCurrentProcess(), ctypes.c_size_t(-1).value, ctypes.c_size_t(-1).value)
 
 
+def _startup_chores(win):
+    """A while after start: tidy up after an update and, once a day, look for a new release."""
+    import time
+    if getattr(sys, "frozen", False):
+        from . import updater
+        updater.cleanup()
+        updater.sync_registered_version()
+    cfg = win.config
+    if cfg.get("check_updates") and time.time() - float(cfg.get("update_checked") or 0) > 86400:
+        from . import updater
+        updater.auto_check(win)
+
+
 def open_new_window(config, paths=None):
     """Ctrl+N / Win+E: another Burrow window (same settings, its own tabs)."""
     w = MainWindow(config, paths or [config.get("new_tab_path") or HOME], primary=False)
@@ -334,22 +349,13 @@ class MainWindow(QMainWindow):
         if config.get("window_state"):
             self.restoreState(QByteArray.fromHex(config.get("window_state").encode()))
 
-        start = paths or [p for p in config.get("session_tabs") if restorable(p)] or [HOME]
-        for p in start:
-            self.new_tab(p, activate=False, after_current=False)
-        cur = config.get("session_current") if not paths else 0
-        self.tabs.setCurrentIndex(min(max(cur, 0), self.tabs.count() - 1))
-        second = [p for p in config.get("session_tabs2") if restorable(p)] if (primary and not paths) else []
-        if second and config.get("split") in ("h", "v"):     # restore the split
-            self.splitter.setOrientation(Qt.Orientation.Horizontal if config.get("split") == "h" else Qt.Orientation.Vertical)
-            p2 = self._add_pane()
-            self.active_pane = p2
-            for p in second:
+        layout = self._saved_layout() if (primary and not paths) else None
+        if not (layout and self._restore_layout(layout)):
+            start = paths or [p for p in config.get("session_tabs") if restorable(p)] or [HOME]
+            for p in start:
                 self.new_tab(p, activate=False, after_current=False)
-            p2.tabs.setCurrentIndex(0)
-            self.active_pane = self.panes[0]
-            self._place_navbar()
-            QTimer.singleShot(0, lambda: self.splitter.setSizes([1, 1]))
+            cur = config.get("session_current") if not paths else 0
+            self.tabs.setCurrentIndex(min(max(cur, 0), self.tabs.count() - 1))
         WINDOWS.append(self)
         self.act_hidden.setChecked(config.get("show_hidden"))
         self._sync_preset_combo()
@@ -402,8 +408,9 @@ class MainWindow(QMainWindow):
         self.act_split_h = A("Split side by side", lambda: self.split(Qt.Orientation.Horizontal), "Ctrl+\\")
         self.act_split_v = A("Split stacked", lambda: self.split(Qt.Orientation.Vertical), "Ctrl+Shift+\\")
         self.act_unsplit = A("Single pane", self.unsplit)
-        self.act_move_pane = A("Move tab to other pane", self.move_tab_to_other_pane, "Ctrl+Alt+M")
-        self.act_other_pane = A("Switch pane", self.focus_other_pane, "F6")
+        self.act_move_pane = A("Move tab to next pane", self.move_tab_to_other_pane, "Ctrl+Alt+M")
+        self.act_other_pane = A("Next pane", self.focus_other_pane, "F6")
+        self.act_rotate_split = A("Rotate split", self.rotate_split, "Ctrl+Alt+\\")
         self.act_close_tab = A("Close tab", lambda: self.close_tab(self.tabs.currentIndex()), "Ctrl+W")
         self.act_reopen_tab = A("Reopen closed tab", self.reopen_tab, "Ctrl+Shift+T")
         self.act_next_tab = A("Next tab", lambda: self.cycle_tab(1), "Ctrl+Tab")
@@ -419,6 +426,10 @@ class MainWindow(QMainWindow):
         self.act_terminal = A("Open terminal here", self.open_terminal)
         self.act_explorer = A("Show in Explorer", self.show_in_explorer)
         self.act_quit = A("Exit", lambda: self.quit_for_real(), "Ctrl+Q")
+        self.act_updates = A("Check for updates…", self.check_updates)
+        self.act_compare = A("Compare && sync folders…", self.open_compare)
+        self.act_dupes = A("Find duplicates…", self.open_duplicates)
+        self.act_bulk_rename = A("Rename selected…", self.open_bulk_rename, "Ctrl+Shift+F2")
 
         T = lambda *a, **k: self._action(*a, tree=True, **k)  # noqa: E731
         self.act_open = T("Open", lambda: self.view().open_entries(self.view().selected_entries()))
@@ -432,7 +443,7 @@ class MainWindow(QMainWindow):
         self.act_copy_to = T("Copy to folder…", lambda: self.transfer_to_dialog(False))
         self.act_move_to = T("Move to folder…", lambda: self.transfer_to_dialog(True))
         self.act_copy_path = T("Copy path", self.copy_path, "Ctrl+Shift+C")
-        self.act_rename = T("Rename", lambda: self.view().edit_current(), "F2")
+        self.act_rename = T("Rename", self.rename_selected, "F2")
         self.act_delete = T("Delete", lambda: self.delete(False), "Del")
         self.act_delete_perm = T("Delete permanently", lambda: self.delete(True), "Shift+Del")
         self.act_select_all = T("Select all", lambda: self.view().select_all(), "Ctrl+A")
@@ -538,6 +549,7 @@ class MainWindow(QMainWindow):
         self.sidebar.dropRequested.connect(self.transfer)
         self.sidebar.mapDriveRequested.connect(self.map_drive)
         self.sidebar.disconnectRequested.connect(self.disconnect_drive)
+        self.sidebar.ejectRequested.connect(self.eject_drive)
         self.side_dock = QDockWidget("Places")
         self.side_dock.setObjectName("sidebar")
         self.side_dock.setWidget(self.sidebar)
@@ -615,6 +627,15 @@ class MainWindow(QMainWindow):
         self.icon_big.setStyleSheet("font-size: 13pt; padding: 0 8px 0 2px;")
         for wdg in (self.icon_small, self.icon_slider, self.icon_big):
             self.statusBar().addPermanentWidget(wdg)
+        self.update_btn = QToolButton()               # shown when a new release is out
+        self.update_btn.setObjectName("statusToggle")
+        self.update_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.update_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.update_btn.hide()
+        self.statusBar().addPermanentWidget(self.update_btn)
+        self.usage_pill = UsagePill()
+        self.usage_pill.hide()
+        self.statusBar().addPermanentWidget(self.usage_pill)
         self.statusBar().addPermanentWidget(self.status_right)
 
     def _make_menus(self):
@@ -640,7 +661,8 @@ class MainWindow(QMainWindow):
         self.presets_menu = v.addMenu("View presets (all folders)")
         self.presets_menu.aboutToShow.connect(self._fill_presets_menu)
         v.addSeparator()
-        for a in (self.act_split_h, self.act_split_v, self.act_unsplit, self.act_move_pane, self.act_other_pane):
+        for a in (self.act_split_h, self.act_split_v, self.act_rotate_split, self.act_unsplit, self.act_move_pane,
+                  self.act_other_pane):
             v.addAction(a)
         v.addSeparator()
         v.addAction(self.act_filter)
@@ -655,8 +677,10 @@ class MainWindow(QMainWindow):
         t = mb.addMenu("&Tools")
         t.aboutToShow.connect(lambda: (self.act_default_fm.setChecked(integration.is_default()),
                                        self.act_win_e.setChecked(bool(self.config.get("win_e")))))
-        for a in (self.act_terminal, self.act_explorer, self.act_properties, None,
-                  self.act_map_drive, self.act_unmap_drive, None, self.act_default_fm, self.act_win_e, None, self.act_settings):
+        for a in (self.act_compare, self.act_dupes, self.act_bulk_rename, None,
+                  self.act_terminal, self.act_explorer, self.act_properties, None,
+                  self.act_map_drive, self.act_unmap_drive, None, self.act_default_fm, self.act_win_e, None,
+                  self.act_updates, self.act_settings):
             t.addSeparator() if a is None else t.addAction(a)
         v.addAction(self.act_menubar)
 
@@ -823,14 +847,95 @@ class MainWindow(QMainWindow):
         if theme.icon("add").isNull():
             p.plus_btn.setText("+")
 
-    def _add_pane(self, index=None):
+    def _make_pane(self):
         p = Pane(self)
-        self.panes.insert(len(self.panes) if index is None else index, p)
-        self.splitter.insertWidget(self.panes.index(p), p)
         self._theme_pane(p)
+        return p
+
+    def _new_splitter(self, orientation):
+        s = QSplitter(orientation)
+        s.setChildrenCollapsible(False)
+        s.setHandleWidth(5)
+        return s
+
+    def _add_pane(self, index=None):
+        p = self._make_pane()
+        self.splitter.insertWidget(len(self.panes) if index is None else index, p)
+        self._reorder_panes()
         if self.active_pane is None:
             self.active_pane = p
         return p
+
+    def _reorder_panes(self):
+        """self.panes in reading order (left to right, top to bottom) across nested splits."""
+        out = []
+
+        def walk(w):
+            if isinstance(w, Pane):
+                out.append(w)
+            elif isinstance(w, QSplitter):
+                for i in range(w.count()):
+                    walk(w.widget(i))
+        walk(self.splitter)
+        self.panes[:] = out
+
+    def _insert_pane(self, target, zone):
+        """A new, empty pane beside target. zone: left / right / top / bottom. Panes split in
+        the same direction share one splitter; a different direction nests a new one, so any
+        grid (two columns, the right one stacked, ...) can be built by snapping tabs."""
+        orient = Qt.Orientation.Horizontal if zone in ("left", "right") else Qt.Orientation.Vertical
+        after = 1 if zone in ("right", "bottom") else 0
+        p = self._make_pane()
+        parent = target.parentWidget()
+        idx = parent.indexOf(target)
+        if parent.count() == 1 or parent.orientation() == orient:
+            sizes = parent.sizes()
+            parent.setOrientation(orient)
+            parent.insertWidget(idx + after, p)
+            if len(sizes) == parent.count() - 1 and sizes[idx] > 0 and parent.count() > 2:
+                half = sizes[idx] // 2
+                sizes[idx] -= half
+                sizes.insert(idx + after, half)
+                parent.setSizes(sizes)
+            else:
+                QTimer.singleShot(0, lambda s=parent: s.setSizes([10000] * s.count()))
+        else:
+            sizes = parent.sizes()
+            sub = self._new_splitter(orient)
+            parent.replaceWidget(idx, sub)
+            sub.addWidget(target)
+            sub.insertWidget(after, p)
+            target.show()
+            parent.setSizes(sizes)
+            sub.setSizes([10000, 10000])
+        self._reorder_panes()
+        self._place_navbar()
+        return p
+
+    def _collapse(self, s):
+        """After a pane closed: fold splitters left with a single child into their parent."""
+        while s is not None and s is not self.splitter and isinstance(s, QSplitter) and s.count() <= 1:
+            gp = s.parentWidget()
+            if s.count() == 1:
+                child = s.widget(0)
+                sizes = gp.sizes()
+                gp.replaceWidget(gp.indexOf(s), child)
+                child.show()
+                gp.setSizes(sizes)
+            s.setParent(None)
+            s.deleteLater()
+            s = gp
+        root = self.splitter
+        if root.count() == 1 and isinstance(root.widget(0), QSplitter):
+            sub = root.widget(0)
+            sizes = sub.sizes()
+            root.setOrientation(sub.orientation())
+            for c in [sub.widget(i) for i in range(sub.count())]:
+                root.addWidget(c)
+                c.show()
+            sub.setParent(None)
+            sub.deleteLater()
+            root.setSizes(sizes)
 
     def _place_navbar(self):
         if len(self.panes) == 1:
@@ -865,22 +970,43 @@ class MainWindow(QMainWindow):
     def pane_of(self, v):
         return next((p for p in self.panes if p.tabs.indexOf(v) >= 0), None)
 
+    def _next_pane(self, step=1):
+        i = self.panes.index(self.active_pane) if self.active_pane in self.panes else 0
+        return self.panes[(i + step) % len(self.panes)]
+
+    def _room_for_pane(self) -> bool:
+        if len(self.panes) < MAX_PANES:
+            return True
+        self.statusBar().showMessage(f"Up to {MAX_PANES} panes per window", 4000)
+        return False
+
     def split(self, orientation, move_current=False):
-        """Two panes, side by side (Horizontal) or stacked (Vertical)."""
-        self.splitter.setOrientation(orientation)
-        if len(self.panes) == 1:
-            src = self.panes[0]
-            p2 = self._add_pane()
-            if move_current and src.tabs.count() > 1:
-                self._move_tab(src, src.tabs.currentIndex(), p2)
-            else:
-                path = self.view().path
-                self.active_pane = p2
-                self.new_tab(path)
-            self._place_navbar()
-            QTimer.singleShot(0, lambda: self.splitter.setSizes([1, 1]))
-            self.set_active_pane(p2)
+        """Split the active pane: side by side (Horizontal) or stacked (Vertical)."""
+        if not self._room_for_pane():
+            return
+        src = self.active_pane
+        new = self._insert_pane(src, "right" if orientation == Qt.Orientation.Horizontal else "bottom")
+        if move_current and src.tabs.count() > 1:
+            self._move_tab(src, src.tabs.currentIndex(), new)
+        else:
+            path = self.view().path
+            self.active_pane = new
+            self.new_tab(path)
+        self._place_navbar()
+        self.set_active_pane(new)
         self.config.set("split", "h" if orientation == Qt.Orientation.Horizontal else "v")
+
+    def rotate_split(self):
+        """Side by side <-> stacked, for every split in the window."""
+        def flip(s):
+            s.setOrientation(Qt.Orientation.Vertical if s.orientation() == Qt.Orientation.Horizontal
+                             else Qt.Orientation.Horizontal)
+            for i in range(s.count()):
+                if isinstance(s.widget(i), QSplitter):
+                    flip(s.widget(i))
+        if len(self.panes) > 1:
+            flip(self.splitter)
+            self._reorder_panes()
 
     def unsplit(self):
         while len(self.panes) > 1:
@@ -891,12 +1017,18 @@ class MainWindow(QMainWindow):
         self.config.set("split", "")
 
     def _remove_pane(self, p):
-        self.panes.remove(p)
         if self.active_pane is p:
-            self.active_pane = self.panes[0]
+            i = self.panes.index(p)
+            self.active_pane = self.panes[i - 1] if i > 0 else self.panes[1]
+        self.panes.remove(p)
         self._place_navbar()                 # move the navbar out before the pane goes away
+        parent = p.parentWidget()
         p.setParent(None)
         p.deleteLater()
+        self._collapse(parent)
+        self._reorder_panes()
+        for q in self.panes:
+            q.set_active(len(self.panes) > 1 and q is self.active_pane)
         if len(self.panes) == 1:
             self.config.set("split", "")
         self._sync_location()
@@ -910,6 +1042,8 @@ class MainWindow(QMainWindow):
         dst.tabs.setTabToolTip(i, display_path(v.path))
         dst.tabs.setCurrentIndex(i)
         if remove_empty and src.tabs.count() == 0 and len(self.panes) > 1:
+            if self.active_pane is src:
+                self.active_pane = dst
             self._remove_pane(src)
         self.set_active_pane(dst)
         v.focus_list()
@@ -919,36 +1053,75 @@ class MainWindow(QMainWindow):
             self.split(Qt.Orientation.Horizontal, move_current=True)
             return
         src = self.active_pane
-        dst = self.panes[1] if src is self.panes[0] else self.panes[0]
-        self._move_tab(src, src.tabs.currentIndex(), dst)
+        self._move_tab(src, src.tabs.currentIndex(), self._next_pane())
 
     def focus_other_pane(self):
         if len(self.panes) > 1:
-            other = self.panes[1] if self.active_pane is self.panes[0] else self.panes[0]
+            other = self._next_pane()
             self.set_active_pane(other)
             if other.tabs.currentWidget():
                 other.tabs.currentWidget().focus_list()
 
     def snap_tab(self, src, index, zone, target):
-        """A tab dropped on an edge (split) or on the other pane (move)."""
-        if src not in self.panes:
+        """A tab dropped on a pane's edge (split that pane) or its middle (move it there)."""
+        if src not in self.panes or target not in self.panes:
             return
         if zone == "move":
             self._move_tab(src, index, target)
             return
-        orient = Qt.Orientation.Horizontal if zone in ("left", "right") else Qt.Orientation.Vertical
-        self.splitter.setOrientation(orient)
-        new = self._add_pane(0 if zone in ("left", "top") else None)
-        if src.tabs.count() > 1:
+        if not self._room_for_pane():
+            return
+        new = self._insert_pane(target, zone)
+        if src.tabs.count() > 1 or src is not target:
             self._move_tab(src, index, new)
-        else:                                 # its only tab: show the same folder in the new pane
+        else:                                 # its only tab, on its own pane: show the folder twice
             v = src.tabs.widget(index)
             self.active_pane = new
             self.new_tab(v.path if v else None)
         self._place_navbar()
-        QTimer.singleShot(0, lambda: self.splitter.setSizes([1, 1]))
         self.set_active_pane(new)
-        self.config.set("split", "h" if orient == Qt.Orientation.Horizontal else "v")
+        self.config.set("split", "h" if zone in ("left", "right") else "v")
+
+    # ----- saving / restoring the split layout --------------------------------------
+    def _layout_of(self, w):
+        if isinstance(w, Pane):
+            return {"tabs": [w.tabs.widget(i).path for i in range(w.tabs.count())], "cur": w.tabs.currentIndex()}
+        return {"o": "h" if w.orientation() == Qt.Orientation.Horizontal else "v", "sizes": w.sizes(),
+                "c": [self._layout_of(w.widget(i)) for i in range(w.count())]}
+
+    def _restore_layout(self, node) -> bool:
+        """Rebuild saved panes. The first pane already exists and is reused."""
+        reuse = [self.panes[0]]
+
+        def build(node, s):
+            s.setOrientation(Qt.Orientation.Horizontal if node.get("o") == "h" else Qt.Orientation.Vertical)
+            for child in node.get("c", [])[:MAX_PANES]:
+                if "c" in child:
+                    sub = self._new_splitter(Qt.Orientation.Horizontal)
+                    s.addWidget(sub)
+                    build(child, sub)
+                    continue
+                p = reuse.pop() if reuse else self._make_pane()
+                s.addWidget(p)
+                if p not in self.panes:
+                    self.panes.append(p)
+                self.active_pane = p
+                for path in [x for x in child.get("tabs", []) if restorable(x)] or [HOME]:
+                    self.new_tab(path, activate=False, after_current=False)
+                p.tabs.setCurrentIndex(min(max(int(child.get("cur") or 0), 0), p.tabs.count() - 1))
+            sizes = node.get("sizes")
+            if sizes and len(sizes) == s.count():
+                QTimer.singleShot(0, lambda s=s, sizes=sizes: s.setSizes(sizes))
+            else:
+                QTimer.singleShot(0, lambda s=s: s.setSizes([10000] * s.count()))
+        try:
+            build(node, self.splitter)
+        except (TypeError, AttributeError, ValueError, KeyError):
+            return False
+        self._reorder_panes()
+        self.active_pane = self.panes[0]
+        self._place_navbar()
+        return True
 
     def _tab_menu(self, pane, pos):
         i = pane.tabs.bar.tabAt(pos)
@@ -962,11 +1135,11 @@ class MainWindow(QMainWindow):
         others.setEnabled(pane.tabs.count() > 1)
         others.triggered.connect(lambda: [self.close_tab(j, pane) for j in reversed(range(pane.tabs.count())) if j != i])
         m.addSeparator()
-        if len(self.panes) == 1:
-            m.addAction("Open in split right").triggered.connect(lambda: self.split(Qt.Orientation.Horizontal, True))
-            m.addAction("Open in split below").triggered.connect(lambda: self.split(Qt.Orientation.Vertical, True))
-        else:
-            m.addAction("Move to other pane").triggered.connect(self.move_tab_to_other_pane)
+        m.addAction("Open in split right").triggered.connect(lambda: self.split(Qt.Orientation.Horizontal, True))
+        m.addAction("Open in split below").triggered.connect(lambda: self.split(Qt.Orientation.Vertical, True))
+        if len(self.panes) > 1:
+            m.addAction("Move to next pane").triggered.connect(self.move_tab_to_other_pane)
+            m.addAction("Rotate split (side by side / stacked)").triggered.connect(self.rotate_split)
             m.addAction("Single pane").triggered.connect(self.unsplit)
         m.addSeparator()
         m.addAction("Open in new window").triggered.connect(lambda: open_new_window(self.config, [pane.tabs.widget(i).path]))
@@ -1070,15 +1243,19 @@ class MainWindow(QMainWindow):
         self.sidebar.highlight(v.path)
         self.setWindowTitle(f"{title_for(v.path)} — {APP_NAME}")
         self.status_right.setText("")
+        self.usage_pill.set_usage(None, None)
         path = v.path
         if not is_location(path):
             def space():
                 du = shutil.disk_usage(path)
-                return f"{human_size(du.free)} free of {human_size(du.total)}"
+                return du.total, du.free
 
             def show(res, path=path):
-                if self.view() is not None and self.view().path == path and isinstance(res, str):
-                    self.status_right.setText(res)
+                if self.view() is not None and self.view().path == path and isinstance(res, tuple):
+                    total, free = res
+                    self.status_right.setText(f"{human_size(free)} free of {human_size(total)}")
+                    self.usage_pill.set_usage(total, free)
+                    self.usage_pill.setToolTip(f"{(1 - free / total) * 100:.0f}% used" if total else "")
             if places.is_remote(path):
                 places.run_async(space, show)      # a network drive may answer slowly
             else:
@@ -1226,6 +1403,12 @@ class MainWindow(QMainWindow):
         for wdg in (self.icon_small, self.icon_slider, self.icon_big):
             wdg.setVisible(bool(c.get("status_icon_slider")))
         self.sidebar.drag_reorder = bool(c.get("sidebar_drag_reorder"))
+        self.sidebar.show_eject = bool(c.get("sidebar_eject"))
+        self.usage_pill.on = bool(c.get("status_storage_bar"))
+        if not self.usage_pill.on:
+            self.usage_pill.hide()
+        for v in self.views():
+            v.set_drive_bars(bool(c.get("drive_usage_bars")))
         self.inspector.set_resizable(bool(c.get("inspector_resizable")))
         if c.get("shortcut_scheme") != getattr(self, "_scheme", None):
             self._scheme = c.get("shortcut_scheme")
@@ -1362,6 +1545,9 @@ class MainWindow(QMainWindow):
                 m.addAction(self.act_open_tab)
             if len(entries) == 1 and not entries[0].is_dir:
                 m.addAction(self.act_open_with)
+            if len(entries) == 1 and entries[0].is_drive and entries[0].ejectable:
+                root = entries[0].path
+                m.addAction("Eject").triggered.connect(lambda: self.eject_drive(root))
             if not any(e.is_drive for e in entries):
                 m.addSeparator()
                 for a in (self.act_cut, self.act_copy, self.act_copy_path, None,
@@ -1404,6 +1590,12 @@ class MainWindow(QMainWindow):
         m.exec(where)
 
     # ----- file operations ---------------------------------------------------------------
+    def rename_selected(self):
+        if len(self._selected()) > 1 and self.config.get("bulk_rename_f2"):
+            self.open_bulk_rename()
+        else:
+            self.view().edit_current()
+
     def _selected(self):
         return [e for e in self.view().selected_entries() if not e.is_drive]
 
@@ -1808,6 +2000,92 @@ class MainWindow(QMainWindow):
         if self.view().path in (DRIVES, NETWORK):
             self.view().refresh()
 
+    # ----- updates and tools (each loads its module on first use) ----------------------
+    def check_updates(self):
+        from . import updater
+        updater.UpdateDialog(self).exec()
+
+    def show_update_available(self, info: dict):
+        for w in WINDOWS:
+            w.update_btn.setText(f"Update to {info['version']}")
+            w.update_btn.setToolTip("A new version of Burrow is out. Click to see what's new.")
+            try:
+                w.update_btn.clicked.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            w.update_btn.clicked.connect(lambda _=False, w=w: w._open_update(info))
+            w.update_btn.show()
+
+    def _open_update(self, info):
+        from . import updater
+        updater.UpdateDialog(self, info).exec()
+        if self.config.get("update_skip") == info["version"]:
+            for w in WINDOWS:
+                w.update_btn.hide()
+
+    def _tool_paths(self):
+        """Folders for the tools: the open folders of each pane (left/right for Compare)."""
+        out = []
+        for p in self.panes:
+            v = p.tabs.currentWidget()
+            if v is not None and v.path and not places.is_special(v.path) and v.path not in out:
+                out.append(v.path)
+        cur = self.view().path if self.view() else None
+        if cur in out:
+            out.remove(cur)
+            out.insert(0, cur)
+        return out
+
+    def open_compare(self):
+        from .tools.compare import CompareWindow
+        paths = self._tool_paths()
+        CompareWindow.open(self.config, paths[0] if paths else "", paths[1] if len(paths) > 1 else "", self)
+
+    def open_duplicates(self):
+        from .tools.duplicates import DuplicatesWindow
+        sel = [e.path for e in self._selected() if e.is_dir]
+        DuplicatesWindow.open(self.config, sel or self._tool_paths()[:1], self)
+
+    def open_bulk_rename(self):
+        sel = self._selected()
+        if len(sel) < 1:
+            self.statusBar().showMessage("Select the files to rename first", 4000)
+            return
+        from .tools.bulkrename import BulkRenameDialog
+        if BulkRenameDialog(self.config, [e.path for e in sel], self).exec():
+            self.refresh_view()
+
+    def eject_drive(self, root: str, kind: str = "drive"):
+        """Eject button / menu: move every tab off the drive first (an open folder or a
+        previewed file keeps it busy), then safely remove it on a worker thread."""
+        letter = root[:2].upper()
+        if kind == "netdrive":
+            self.disconnect_drive(letter)
+            return
+        name = next((d.name for d in list_drives()
+                     if d.path[:2].upper() == letter), letter)
+        for w in WINDOWS:
+            for v in w.views():
+                if v.path and v.path[:2].upper() == letter:
+                    v.navigate(DRIVES)
+            shown = getattr(w.inspector, "_shown", None)
+            if shown is not None:
+                w.inspector._reset()
+                w.inspector.media._release()
+        self.statusBar().showMessage(f"Ejecting {name}…")
+        from . import eject
+
+        def done(res):
+            if isinstance(res, Exception):
+                res = str(res)
+            if res:
+                self.statusBar().clearMessage()
+                QMessageBox.warning(self, APP_NAME, f"Couldn't eject {name}.\n\n{res}")
+            else:
+                self.statusBar().showMessage(f"{name} can be safely removed.", 6000)
+            _drives_changed()
+        places.run_async(lambda: eject.eject(letter), done)
+
     def open_settings(self):
         dialogs.SettingsDialog(self.config, self).exec()
 
@@ -1868,12 +2146,23 @@ class MainWindow(QMainWindow):
         super().closeEvent(ev)
         QApplication.instance().quit()
 
+    def _saved_layout(self):
+        c = self.config
+        lay = c.get("pane_layout")
+        if isinstance(lay, dict) and lay.get("c"):
+            return lay
+        second = c.get("session_tabs2")                    # Burrow 0.12: at most two panes
+        if second and c.get("split") in ("h", "v"):
+            return {"o": c.get("split"), "c": [{"tabs": c.get("session_tabs"), "cur": c.get("session_current")},
+                                              {"tabs": second, "cur": 0}]}
+        return None
+
     def _save_session(self):
         p0 = self.panes[0]
         self.config.data["session_tabs"] = [p0.tabs.widget(i).path for i in range(p0.tabs.count())]
         self.config.data["session_current"] = p0.tabs.currentIndex()
-        self.config.data["session_tabs2"] = ([self.panes[1].tabs.widget(i).path for i in range(self.panes[1].tabs.count())]
-                                             if len(self.panes) > 1 else [])
+        self.config.data["session_tabs2"] = []
+        self.config.data["pane_layout"] = self._layout_of(self.splitter) if len(self.panes) > 1 else None
         self.config.data["window_geometry"] = bytes(self.saveGeometry().toHex().data()).decode()
         self.config.data["window_state"] = bytes(self.saveState().toHex().data()).decode()
         self.config.save()
@@ -1915,4 +2204,5 @@ def main():
     from .devwatch import DeviceWatcher
     app._devwatch = DeviceWatcher(app)
     app._devwatch.changed.connect(_drives_changed)
+    QTimer.singleShot(20000, lambda: _startup_chores(win))
     return app.exec()

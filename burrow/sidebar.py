@@ -17,7 +17,9 @@ PATH_ROLE = Qt.ItemDataRole.UserRole
 KIND_ROLE = Qt.ItemDataRole.UserRole + 1
 INDEX_ROLE = Qt.ItemDataRole.UserRole + 2
 SECTION_ROLE = Qt.ItemDataRole.UserRole + 3   # stable id of a section, for remembering collapse
+EJECT_ROLE = Qt.ItemDataRole.UserRole + 4     # drive rows with an eject button
 SECTION_MIME = "application/x-burrow-sidebar-section"
+EJECT_W = 22                                  # the eject button at a row's right end
 DEFAULT_ORDER = ["bookmarks", "places", "cloud", "tags", "pc", "network"]
 
 PLACES = [
@@ -40,6 +42,8 @@ class _SidebarDelegate(QStyledItemDelegate):
         self.select = QColor(0, 0, 0, 0)
         self.hover = QColor(0, 0, 0, 0)
         self.seltext = QColor(0, 0, 0)
+        self.eject_hover = None        # the row whose eject button the mouse is on
+        self.show_eject = True
 
     def sizeHint(self, option, index):
         s = super().sizeHint(option, index)
@@ -64,8 +68,30 @@ class _SidebarDelegate(QStyledItemDelegate):
             opt.palette.setColor(QPalette.ColorRole.HighlightedText, self.seltext)
         opt.state &= ~(QStyle.StateFlag.State_Selected | QStyle.StateFlag.State_MouseOver | QStyle.StateFlag.State_HasFocus)
         opt.rect = opt.rect.adjusted(4, 0, 0, 0)
+        eject = self.show_eject and index.data(EJECT_ROLE)
+        if eject:
+            opt.rect = opt.rect.adjusted(0, 0, -EJECT_W, 0)
         w = opt.widget
         (w.style() if w else QApplication.style()).drawControl(QStyle.ControlElement.CE_ItemViewItem, opt, painter, w)
+        if eject:
+            self._paint_eject(painter, option.rect, opt.palette.color(QPalette.ColorRole.Text),
+                              self.eject_hover == index)
+
+    @staticmethod
+    def _paint_eject(painter, rect, color, hot):
+        """A small eject mark (triangle over a bar), faint until hovered."""
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        c = QColor(color)
+        c.setAlpha(230 if hot else 110)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(c)
+        cx, cy = rect.right() - EJECT_W / 2 - 1, rect.center().y() + 0.5
+        from PySide6.QtCore import QPointF
+        from PySide6.QtGui import QPolygonF
+        painter.drawPolygon(QPolygonF([QPointF(cx - 4.5, cy + 0.5), QPointF(cx + 4.5, cy + 0.5), QPointF(cx, cy - 4.5)]))
+        painter.drawRoundedRect(QRectF(cx - 4.5, cy + 2.2, 9, 1.8), 0.9, 0.9)
+        painter.restore()
 
 
 class Sidebar(QTreeWidget):
@@ -74,6 +100,7 @@ class Sidebar(QTreeWidget):
     mapDriveRequested = Signal()
     disconnectRequested = Signal(str)          # drive letter
     browseRequested = Signal(str)              # arrowing through: open, but keep focus here
+    ejectRequested = Signal(str, str)          # drive root, kind (drive / netdrive)
     focusListRequested = Signal()              # → / Enter: back to the file list
 
     def __init__(self, config: Config, parent=None):
@@ -201,7 +228,8 @@ class Sidebar(QTreeWidget):
             hint.setFlags(Qt.ItemFlag.NoItemFlags)
         pc = self._section("This PC", DRIVES, key="pc")
         for d in local:
-            self._item(pc, d.name, d.path, "drive", icons.icon(d), f"{d.path}  —  {d.note}")
+            it = self._item(pc, d.name, d.path, "drive", icons.icon(d), f"{d.path}  —  {d.note}")
+            it.setData(0, EJECT_ROLE, d.ejectable)
         net = self._section("Network", NETWORK, icons.network, key="network") if cfg.get("sidebar_network") else None
         if net is not None:
             net.setData(0, KIND_ROLE, "network-root")
@@ -209,6 +237,8 @@ class Sidebar(QTreeWidget):
             it = self._item(net, d.name, d.path, "netdrive", icons.network, f"{d.path}  —  {d.note}")
             if d.note.startswith("Disconnected"):
                 it.setForeground(0, QColor(theme.colors()["dim"]))
+            else:
+                it.setData(0, EJECT_ROLE, True)
         for s in (places.RECENT_SERVERS if net is not None else []):
             self._item(net, s[2:], s, "server", icons.network, s)
         self._apply_order()
@@ -333,10 +363,31 @@ class Sidebar(QTreeWidget):
         would otherwise fill this strip as a separate block beside the rounded highlight."""
         return
 
+    @property
+    def show_eject(self) -> bool:
+        return self._delegate.show_eject
+
+    @show_eject.setter
+    def show_eject(self, on: bool):
+        self._delegate.show_eject = on
+        self.viewport().update()
+
+    def _eject_at(self, pos):
+        """The drive item whose eject button is under pos, if any."""
+        it = self.itemAt(pos)
+        if it is None or not self.show_eject or not it.data(0, EJECT_ROLE):
+            return None
+        r = self.visualItemRect(it)
+        return it if pos.x() >= r.right() - EJECT_W - 2 else None
+
     def mousePressEvent(self, ev):
         self._press = None
         if ev.button() == Qt.MouseButton.LeftButton:
             it = self.itemAt(ev.position().toPoint())
+            ej = self._eject_at(ev.position().toPoint())
+            if ej is not None:
+                self.ejectRequested.emit(ej.data(0, PATH_ROLE), ej.data(0, KIND_ROLE))
+                return
             if self.drag_reorder and it is not None and it.parent() is None and it.data(0, SECTION_ROLE):
                 self._press = (ev.position().toPoint(), it.data(0, SECTION_ROLE))
             # the chevron at the start of a heading toggles it, even on link headings
@@ -427,7 +478,28 @@ class Sidebar(QTreeWidget):
             self._drop_y = None
             self.viewport().update()
             return
+        ej = self._eject_at(ev.position().toPoint())
+        hot = self.indexFromItem(ej) if ej is not None else None
+        if hot != self._delegate.eject_hover:
+            self._delegate.eject_hover = hot
+            self.viewport().update()
         super().mouseMoveEvent(ev)
+
+    def leaveEvent(self, ev):
+        if self._delegate.eject_hover is not None:
+            self._delegate.eject_hover = None
+            self.viewport().update()
+        super().leaveEvent(ev)
+
+    def viewportEvent(self, ev):
+        from PySide6.QtCore import QEvent
+        if ev.type() == QEvent.Type.ToolTip:
+            ej = self._eject_at(ev.pos())
+            if ej is not None:
+                from PySide6.QtWidgets import QToolTip
+                QToolTip.showText(ev.globalPos(), "Disconnect" if ej.data(0, KIND_ROLE) == "netdrive" else "Eject", self)
+                return True
+        return super().viewportEvent(ev)
 
     def paintEvent(self, ev):
         super().paintEvent(ev)
@@ -468,6 +540,9 @@ class Sidebar(QTreeWidget):
         elif not places.is_special(path) and not self.config.is_bookmarked(path):
             m.addSeparator()
             m.addAction("Add bookmark").triggered.connect(lambda: self.config.add_bookmark(path))
+        if kind == "drive" and it.data(0, EJECT_ROLE):
+            m.addSeparator()
+            m.addAction("Eject").triggered.connect(lambda: self.ejectRequested.emit(path, kind))
         if kind in ("network-root", "netdrive", "server"):
             m.addSeparator()
             m.addAction("Map network drive…").triggered.connect(self.mapDriveRequested)

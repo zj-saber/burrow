@@ -64,7 +64,7 @@ def attr_string(attrs: int) -> str:
 
 class Entry:
     __slots__ = ("name", "path", "is_dir", "size", "mtime", "ctime", "atime", "attrs",
-                 "hidden", "is_drive", "note", "nkey", "ext", "kind")
+                 "hidden", "is_drive", "note", "nkey", "ext", "kind", "free", "ejectable")
 
     def __init__(self, name, path, is_dir, size=None, mtime=None, ctime=None, atime=None,
                  attrs=0, hidden=False, is_drive=False, note="", kind=""):
@@ -75,6 +75,8 @@ class Entry:
         self.size, self.mtime, self.ctime, self.atime = size, mtime, ctime, atime
         self.attrs, self.hidden, self.is_drive, self.note = attrs, hidden, is_drive, note
         self.kind = kind
+        self.free = None              # drives: free bytes (size holds the total)
+        self.ejectable = False
         self._set_name_keys()
 
     def _set_name_keys(self):
@@ -276,7 +278,10 @@ def drive_entry(info: dict) -> Entry:
         note = f"{human_size(info['free'])} free of {human_size(info['total'])}"
     else:
         note = "Not ready"
-    return Entry(name, info["root"], True, info["total"], is_drive=True, note=note, kind=kind)
+    e = Entry(name, info["root"], True, info["total"], is_drive=True, note=note, kind=kind)
+    e.free = info["free"]
+    e.ejectable = bool(info.get("ejectable"))
+    return e
 
 
 def cloud_entries() -> list[Entry]:

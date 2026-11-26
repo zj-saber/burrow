@@ -59,6 +59,7 @@ class RowDelegate(QStyledItemDelegate):
         super().__init__(parent)
         self.row_height = 26
         self.hover = QColor(0, 0, 0, 0)
+        self.size_col = None       # This PC: the Size column also shows how full each drive is
 
     def sizeHint(self, option, index):
         s = super().sizeHint(option, index)
@@ -72,6 +73,22 @@ class RowDelegate(QStyledItemDelegate):
             painter.fillRect(option.rect, self.hover)
         if state & _FOCUS:
             option.state = state & ~_FOCUS
+        if self.size_col is not None and index.column() == self.size_col:
+            e = index.data(ENTRY_ROLE)
+            if e is not None and e.size and e.free is not None:
+                # This PC: a pill instead of the total (Type already says "X free of Y")
+                from PySide6.QtCore import QRectF
+                from PySide6.QtWidgets import QApplication, QStyleOptionViewItem
+                opt = QStyleOptionViewItem(option)
+                self.initStyleOption(opt, index)
+                opt.text = ""
+                QApplication.style().drawControl(QStyle.ControlElement.CE_ItemViewItem, opt, painter, opt.widget)
+                r = option.rect
+                w = min(r.width() - 16, 120)
+                if w >= 16:
+                    theme.paint_usage(painter, QRectF(r.right() - 8 - w, r.center().y() - 1.5, w, 4),
+                                      1 - e.free / e.size)
+                return
         super().paint(painter, option, index)
 
 
@@ -396,9 +413,20 @@ class FolderView(QWidget):
         if self.watcher.directories():
             self.watcher.removePaths(self.watcher.directories())
         self._load([select] if select else [], select, clear=True)
+        self._sync_drive_bars()
         self._sync_mode_widgets(select)
         self.pathChanged.emit(path)
         return True
+
+    def set_drive_bars(self, on: bool):
+        self.drive_bars = on
+        self._sync_drive_bars()
+
+    def _sync_drive_bars(self):
+        col = COLUMNS.index("size") if (self.path == DRIVES and getattr(self, "drive_bars", True)) else None
+        if col != self.row_delegate.size_col:
+            self.row_delegate.size_col = col
+            self.tree.viewport().update()
 
     # ----- columns view (optional, per tab) ------------------------------------------
     def columns_active(self) -> bool:

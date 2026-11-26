@@ -36,12 +36,14 @@ New-Item -ItemType Directory -Force assets | Out-Null
 
 # Leave out Qt parts Burrow never loads (checked against every DLL's import table):
 # software OpenGL, the QML/Quick stack (only the on-screen keyboard plugin pulled it in),
-# TLS backends (Burrow makes no web requests), translations and spare platform plugins.
+# OpenSSL and its TLS backends (update checks use Windows' own TLS through the schannel
+# backend), translations and spare platform plugins.
 $int = "dist\Burrow\_internal"
 $drop = @(
     "PySide6\opengl32sw.dll", "PySide6\Qt6Quick.dll", "PySide6\Qt6Qml.dll", "PySide6\Qt6QmlModels.dll",
     "PySide6\Qt6QmlMeta.dll", "PySide6\Qt6QmlWorkerScript.dll", "PySide6\Qt6VirtualKeyboard.dll",
-    "PySide6\Qt6OpenGL.dll", "PySide6\plugins\platforminputcontexts", "PySide6\plugins\tls",
+    "PySide6\Qt6OpenGL.dll", "PySide6\plugins\platforminputcontexts", "PySide6\plugins\tls\qopensslbackend.dll",
+    "PySide6\plugins\tls\qcertonlybackend.dll",
     "PySide6\plugins\networkinformation", "PySide6\plugins\platforms\qdirect2d.dll",
     "PySide6\plugins\platforms\qminimal.dll", "PySide6\plugins\platforms\qoffscreen.dll",
     "PySide6\translations", "libssl-3-x64.dll", "libcrypto-3-x64.dll", "libssl-3.dll", "libcrypto-3.dll"

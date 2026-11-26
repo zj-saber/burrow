@@ -339,3 +339,29 @@ class AddressArea(QStackedWidget):
     def stop_edit(self):
         if self.currentWidget() is self.edit:
             self.setCurrentWidget(self.crumbs)
+
+
+class UsagePill(QWidget):
+    """Status bar: how full the current drive is, as a skinny pill."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.used = None
+        self.on = True                 # Settings switch
+        self.setFixedSize(64, 14)
+
+    def set_usage(self, total, free):
+        self.used = (1 - free / total) if total and free is not None else None
+        self.setVisible(self.used is not None and self.on)
+        self.update()
+
+    def paintEvent(self, _ev):
+        if self.used is None:
+            return
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QPainter
+        from . import theme
+        p = QPainter(self)
+        h = 4
+        theme.paint_usage(p, QRectF(2, (self.height() - h) / 2, self.width() - 4, h), self.used)
+        p.end()
