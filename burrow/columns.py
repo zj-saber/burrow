@@ -69,11 +69,63 @@ class _RowDelegate(QStyledItemDelegate):
             painter.setPen(c)
             painter.drawText(option.rect.adjusted(0, 0, -8, 0), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, text)
             painter.restore()
-        from . import marks
+        from . import marks, tags
         if marks.MARKS:
             k = marks.MARKS.get(os.path.normpath(index.model().filePath(index)).lower())
             if k:
                 painter.fillRect(option.rect, marks.color(k))
+        store = tags.store()
+        if tags.ENABLED and store.items:                     # tag dots, as in the list
+            ids = store.get(os.path.normpath(index.model().filePath(index)))
+            if ids:
+                from PySide6.QtCore import QPointF
+                from PySide6.QtGui import QPainter
+                painter.save()
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                painter.setPen(option.palette.color(QPalette.ColorRole.Base))
+                x, cy = option.rect.left() + 4, option.rect.top() + 6
+                for tid in ids:                               # small dots in the icon's corner
+                    painter.setBrush(QColor(tags.TAG_COLORS[tid]))
+                    painter.drawEllipse(QPointF(x, cy), 3.5, 3.5)
+                    x += 7
+                painter.restore()
+
+    # ----- inline rename (F2), checked and applied by Burrow like in the list -----------------
+    def setEditorData(self, editor, index):
+        """Start with the name selected but not the extension, like Explorer."""
+        editor.setText(index.model().fileName(index))
+        text = editor.text()
+        n = text.rfind(".") if (not index.model().isDir(index) and "." in text[1:]) else len(text)
+        def select():
+            try:
+                editor.setSelection(0, n)
+            except RuntimeError:                  # the editor closed already
+                pass
+        QTimer.singleShot(0, select)
+
+    def setModelData(self, editor, model, index):
+        from . import tags
+        from .model import name_problem
+        view = self.parent()
+        old = view.path_of(index)
+        name = editor.text().strip().rstrip(".")
+        if not name or name == os.path.basename(old):
+            return
+        problem = name_problem(name)
+        if problem:
+            view.renameFailed.emit(problem)
+            return
+        new = os.path.join(os.path.dirname(old), name)
+        if os.path.exists(new) and os.path.normcase(new) != os.path.normcase(old):
+            view.renameFailed.emit(f"“{name}” already exists here.")
+            return
+        try:
+            os.rename(old, new)
+        except OSError as ex:
+            view.renameFailed.emit(f"Couldn't rename: {ex.strerror or ex}")
+            return
+        tags.store().renamed(old, new)
+        QTimer.singleShot(200, lambda: view.select_path(new))     # once the model has the new name
 
 
 class _Column(QListView):
@@ -120,6 +172,10 @@ class _Column(QListView):
             self._glide(y + h - vh + margin)
 
     def wheelEvent(self, ev):
+        if ev.modifiers() & Qt.KeyboardModifier.ControlModifier and ev.angleDelta().y():
+            if self.owner.icon_wheel_handler is not None:     # Ctrl+wheel: icon size
+                self.owner.icon_wheel_handler(1 if ev.angleDelta().y() > 0 else -1)
+            return
         steps = ev.angleDelta().y() / 120
         if ev.pixelDelta().isNull() and steps and not ev.modifiers():
             base = self._anim.endValue() if self._anim.state() == QPropertyAnimation.State.Running \
@@ -140,10 +196,73 @@ class _Column(QListView):
             return
         text = ev.text()
         typing = self.owner.searching()          # a space only counts in the middle of a name
+        if (k == Qt.Key.Key_Space and not mods and not typing and self.owner.space_handler is not None
+                and self.owner.space_handler()):
+            return                               # Space played/paused the media preview
         if text and text.isprintable() and (typing or not text.isspace())                 and not (mods & ~Qt.KeyboardModifier.ShiftModifier):
-            self.owner.type_search(text)
+            if self.owner.search_handler is None or not self.owner.search_handler(text):
+                self.owner.type_search(text)       # no Everything: jump to a name in this column
             return
         super().keyPressEvent(ev)
+
+    def mousePressEvent(self, ev):
+        """Back / forward mouse buttons navigate; the middle button opens a folder in a new tab."""
+        b = ev.button()
+        if b == Qt.MouseButton.BackButton:
+            self.owner.backRequested.emit()
+            return
+        if b == Qt.MouseButton.ForwardButton:
+            self.owner.forwardRequested.emit()
+            return
+        if b == Qt.MouseButton.MiddleButton:
+            idx = self.indexAt(ev.position().toPoint())
+            if idx.isValid() and self.owner.fs.isDir(idx):
+                self.owner.newTabRequested.emit(self.owner.path_of(idx))
+            return
+        super().mousePressEvent(ev)
+
+    # ----- drops: onto a folder, or into this column's folder (copy / move like the list) -------
+    @staticmethod
+    def _paths(md):
+        if not md.hasUrls():
+            return []
+        return [os.path.normpath(u.toLocalFile()) for u in md.urls() if u.isLocalFile()]
+
+    def _evaluate(self, ev):
+        from . import fileops
+        paths = self._paths(ev.mimeData())
+        idx = self.indexAt(ev.position().toPoint())
+        if idx.isValid() and self.owner.fs.isDir(idx):
+            target = self.owner.path_of(idx)
+        else:
+            target = self.owner.path_of(self.rootIndex())       # "" in the drives column
+        if not paths or not target or any(fileops.same_path(p, target) for p in paths):
+            return None
+        return paths, target, fileops.decide_move(ev.modifiers(), paths, target)
+
+    def dragEnterEvent(self, ev):
+        if self._paths(ev.mimeData()):
+            ev.acceptProposedAction()
+        else:
+            ev.ignore()
+
+    def dragMoveEvent(self, ev):
+        r = self._evaluate(ev)
+        if r is None:
+            ev.ignore()
+            return
+        ev.setDropAction(Qt.DropAction.MoveAction if r[2] else Qt.DropAction.CopyAction)
+        ev.accept()
+
+    def dropEvent(self, ev):
+        r = self._evaluate(ev)
+        if r is None:
+            ev.ignore()
+            return
+        ev.setDropAction(Qt.DropAction.CopyAction)     # we move it ourselves (see the list)
+        ev.accept()
+        paths, target, move = r
+        QTimer.singleShot(0, lambda: self.owner.dropRequested.emit(paths, target, move))
 
 
 class ColumnsView(QColumnView):
@@ -152,6 +271,14 @@ class ColumnsView(QColumnView):
     fileChosen = Signal(str)          # a file is selected: its folder is the tab's folder
     openRequested = Signal(list)      # Enter / double-click on files
     contextMenu = Signal(object)      # pos in viewport coordinates
+    dropRequested = Signal(list, str, bool)   # sources, target folder, move?
+    renameFailed = Signal(str)
+    backRequested = Signal()
+    forwardRequested = Signal()
+    newTabRequested = Signal(str)
+    search_handler = None             # set by the tab: typing searches with Everything
+    space_handler = None              # set by the tab: Space plays / pauses media previews
+    icon_wheel_handler = None         # set by the tab: Ctrl+wheel changes the icon size
     show_sizes = False                # Settings: small sizes after the names (class defaults:
     folder_sizes_on = True            # columns are created during setModel, before __init__ ends)
     extra_actions: tuple = ()         # the window's file actions (set per view); createColumn runs
@@ -160,7 +287,8 @@ class ColumnsView(QColumnView):
     def __init__(self, show_hidden: bool, row_height: int = 24, parent=None):
         super().__init__(parent)
         self.fs = QFileSystemModel(self)
-        self.fs.setReadOnly(True)                 # drag out only; moves go through Burrow
+        self.fs.setReadOnly(False)                # editable for inline rename, which the delegate
+                                                  # does itself; drops and moves go through Burrow
         self.fs.setRootPath("")                   # "This PC": drives in the first column
         # columns copy these from the view (initializeColumn): pixel scrolling for smooth glides
         self.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
@@ -168,6 +296,8 @@ class ColumnsView(QColumnView):
         self.setModel(self.fs)
         self._delegate = _RowDelegate(row_height, self)
         self.setItemDelegate(self._delegate)
+        for col in self.findChildren(QListView):      # the drives column was made in setModel,
+            col.setItemDelegate(self._delegate)       # with Qt's delegate (which draws arrows)
         self.setFrameShape(QFrame.Shape.NoFrame)
         # compact: no scroll bars or resize grips (the wheel, Shift+wheel and keys still scroll)
         self.setResizeGripsVisible(False)
@@ -215,6 +345,10 @@ class ColumnsView(QColumnView):
         col.addActions(self.extra_actions)
         col.setMouseTracking(True)
         col.viewport().setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        col.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)   # F2 only
+        col.setAcceptDrops(True)
+        col.viewport().setAcceptDrops(True)
+        col.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
         self._ask_folder_sizes(index)
         return col
 
@@ -289,6 +423,23 @@ class ColumnsView(QColumnView):
             self.scrollTo(idx)
         finally:
             self._quiet = False
+
+    def select_path(self, path: str):
+        """Select one item (after a rename), keeping the columns where they are."""
+        idx = self.fs.index(path)
+        if idx.isValid():
+            self._go_to(idx)
+
+    def edit_current(self) -> bool:
+        """F2: rename the current item in place (not drives)."""
+        cur = self.currentIndex()
+        if not cur.isValid() or not cur.parent().isValid():
+            return False
+        col = self.column_for(cur.parent())
+        if col is None:
+            return False
+        col.edit(cur)
+        return True
 
     def path_of(self, idx: QModelIndex) -> str:
         return os.path.normpath(self.fs.filePath(idx)) if idx.isValid() else ""
@@ -404,5 +555,9 @@ class ColumnsView(QColumnView):
             self._go_to(self.fs.index(hit, 0, root))
 
     def _activated(self, idx: QModelIndex):
-        if idx.isValid() and not self.fs.isDir(idx):
+        if not idx.isValid():
+            return
+        if self.fs.isDir(idx):
+            self.go_in()
+        else:
             self.openRequested.emit(self.selected_paths())

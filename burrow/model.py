@@ -80,7 +80,7 @@ def attr_string(attrs: int) -> str:
 class Entry:
     """One row: a file, folder, drive, share or server, with the facts the columns show."""
     __slots__ = ("name", "path", "is_dir", "size", "mtime", "ctime", "atime", "attrs",
-                 "hidden", "is_drive", "note", "nkey", "ext", "kind", "free", "ejectable")
+                 "hidden", "is_drive", "note", "nkey", "ext", "kind", "free", "ejectable", "where")
 
     def __init__(self, name, path, is_dir, size=None, mtime=None, ctime=None, atime=None,
                  attrs=0, hidden=False, is_drive=False, note="", kind=""):
@@ -93,6 +93,7 @@ class Entry:
         self.kind = kind
         self.free = None              # drives: free bytes (size holds the total)
         self.ejectable = False
+        self.where = ""               # search results: the subfolder it's in, e.g. "Photos\\2024"
         self._set_name_keys()
 
     def _set_name_keys(self):
@@ -485,7 +486,7 @@ class DirModel(QAbstractTableModel):
         col = COLUMNS[index.column()]
         if role == Qt.ItemDataRole.DisplayRole:
             if col == "name":
-                return e.name
+                return f"{e.name}   ·  {e.where}" if e.where else e.name
             if col == "size":
                 return human_size(e.size)        # folders too, once Everything has sized them
             if col == "type":

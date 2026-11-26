@@ -89,6 +89,7 @@ DEFAULTS = {
     "theme": "system",
     "palette": "burrow",
     "everything_sizes": True,
+    "everything_search": True,      # typing searches the open folder and its subfolders
     # feature switches (Settings)
     "show_folder_icons": True,      # Explorer folder colors/icons in the list and sidebar
     "show_tags": True,              # tag dots, Tags menu and sidebar section

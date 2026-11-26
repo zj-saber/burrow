@@ -25,6 +25,7 @@ COPYDATA_QUERY2W = 18
 WM_COPYDATA = 0x004A
 REQUEST_FULL_PATH = 0x00000004
 REQUEST_SIZE = 0x00000010
+REQUEST_DATE_MODIFIED = 0x00000040
 ITEM_FOLDER = 0x1
 SORT_NAME_ASC = 1
 TIMEOUT_MS = 1500
@@ -61,8 +62,9 @@ def _escape(path: str) -> str:
     return path.replace('"', "")
 
 
-def parse_list2(data: bytes) -> list[tuple[str, int | None, bool]]:
-    """Parse EVERYTHING_IPC_LIST2 with FULL_PATH|SIZE requested -> [(path, size, is_folder)]."""
+def parse_list2(data: bytes) -> list[tuple[str, int | None, bool, float | None]]:
+    """Parse EVERYTHING_IPC_LIST2 (FULL_PATH, SIZE, DATE_MODIFIED as requested)
+    -> [(path, size, is_folder, modified as a Unix time)]."""
     if len(data) < 20:
         return []
     _tot, num, _off, flags, _sort = struct.unpack_from("<5I", data, 0)
@@ -70,7 +72,7 @@ def parse_list2(data: bytes) -> list[tuple[str, int | None, bool]]:
     for i in range(num):
         item_flags, data_offset = struct.unpack_from("<2I", data, 20 + i * 8)
         p = data_offset
-        path, size = "", None
+        path, size, mtime = "", None, None
         if flags & REQUEST_FULL_PATH:
             (n,) = struct.unpack_from("<I", data, p)
             p += 4
@@ -80,7 +82,12 @@ def parse_list2(data: bytes) -> list[tuple[str, int | None, bool]]:
             (sz,) = struct.unpack_from("<q", data, p)
             p += 8
             size = sz if sz >= 0 else None          # -1: size not indexed
-        out.append((path, size, bool(item_flags & ITEM_FOLDER)))
+        if flags & REQUEST_DATE_MODIFIED:
+            (ft,) = struct.unpack_from("<q", data, p)
+            p += 8
+            if ft > 116444736000000000:              # FILETIME (100 ns since 1601) -> Unix time
+                mtime = (ft - 116444736000000000) / 1e7
+        out.append((path, size, bool(item_flags & ITEM_FOLDER), mtime))
     return out
 
 
@@ -112,7 +119,7 @@ class EverythingClient(QWidget):
                     return True, 1
         return False, 0
 
-    def query(self, search: str, callback, request=REQUEST_FULL_PATH | REQUEST_SIZE) -> bool:
+    def query(self, search: str, callback, request=REQUEST_FULL_PATH | REQUEST_SIZE, limit: int = 0xFFFFFFFF) -> bool:
         """Ask Everything; callback(results) runs on the GUI thread when the answer arrives
         (a few ms later, via the event loop). Returns False if Everything isn't available."""
         target = _everything_hwnd()
@@ -121,7 +128,7 @@ class EverythingClient(QWidget):
             return False
         rid = next(self._ids)
         text = (search + "\0").encode("utf-16-le")
-        header = struct.pack("<7I", self._hwnd & 0xFFFFFFFF, rid, 0, 0, 0xFFFFFFFF, request, SORT_NAME_ASC)
+        header = struct.pack("<7I", self._hwnd & 0xFFFFFFFF, rid, 0, 0, limit, request, SORT_NAME_ASC)
         payload = ctypes.create_string_buffer(header + text, len(header) + len(text))
         cds = COPYDATASTRUCT(COPYDATA_QUERY2W, len(header) + len(text), ctypes.addressof(payload))
         self._pending[rid] = callback
@@ -143,8 +150,15 @@ class EverythingClient(QWidget):
         search = f'parent:"{_escape(parent)}" folder:'
 
         def done(results):
-            callback({os.path.normcase(p): s for p, s, is_folder in results if is_folder and s is not None})
+            callback({os.path.normcase(p): s for p, s, is_folder, _m in results if is_folder and s is not None})
         return self.query(search, done)
+
+    def search_under(self, folder: str, text: str, callback, limit: int = 2000) -> bool:
+        """Everything under folder (any depth) whose name matches text, with Everything's own
+        syntax (several words, *, ext:...): callback([(path, size, is_folder, modified)])."""
+        root = folder.rstrip("\\") + "\\"
+        return self.query(f'"{_escape(root)}" {text}', callback,
+                          REQUEST_FULL_PATH | REQUEST_SIZE | REQUEST_DATE_MODIFIED, limit)
 
     def size_of(self, path: str, callback) -> bool:
         """Size of one folder: callback(size or None). Asks for the folder's siblings (an exact,

@@ -322,6 +322,12 @@ class FolderView(QWidget):
         self.mode = config.get("view_mode") if config.get("view_mode") in ("list", "columns") else "list"
         self.columns = None                # built the first time this tab shows columns
         self._from_columns = False
+        self._searched = False             # the list shows Everything results, not the folder
+        self._search_token = 0
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(150)   # one query per pause in typing
+        self._search_timer.timeout.connect(self._run_search)
 
         self.model = DirModel(self)
         self.model.date_format = config.get("date_format")
@@ -373,7 +379,7 @@ class FolderView(QWidget):
         h.sectionMoved.connect(lambda *_: self._layout_edited())
 
         self.filter_edit = FilterEdit()
-        self.filter_edit.setPlaceholderText("Filter by name (just start typing) — Esc clears")
+        self.filter_edit.setPlaceholderText("Search (just start typing) — Esc clears")
         self.filter_edit.setClearButtonEnabled(True)
         self.filter_edit.textChanged.connect(self._filter_changed)
         self.filter_edit.leave.connect(self.tree.setFocus)
@@ -439,6 +445,8 @@ class FolderView(QWidget):
             self.back_stack.append(self.path)
             self.fwd_stack.clear()
         self.path = path
+        self._searched = False
+        self._search_timer.stop()
         self.filter_edit.blockSignals(True)
         self.filter_edit.clear()
         self.filter_edit.hide()
@@ -542,7 +550,8 @@ class FolderView(QWidget):
 
     def _sync_mode_widgets(self, select: str | None = None):
         """Columns can't show virtual places (This PC, Network, tags): those stay a list."""
-        want = self.mode == "columns" and self.path is not None and not places.is_special(self.path)
+        want = self.mode == "columns" and self.path is not None and not places.is_special(self.path) \
+            and not self.filter_text()
         if want and self.columns is None:
             from .columns import ColumnsView
             c = self.columns = ColumnsView(bool(self.config.get("show_hidden")), self.row_height(), self)
@@ -555,6 +564,16 @@ class FolderView(QWidget):
             c.extra_actions = list(self.tree.actions())   # Ctrl+C, Del, F2... work in columns too
             c.set_show_sizes(bool(self.config.get("columns_sizes")), bool(self.config.get("everything_sizes")))
             c.set_hover_color(self.tree.hover_color)
+            c.search_handler = self._column_typed
+            # the rest of what the list does: Space plays media, Ctrl+wheel icon size, mouse
+            # back/forward/middle, drops, rename errors. (← stays in the columns, never the sidebar.)
+            c.space_handler = lambda: self.space_handler is not None and self.space_handler()
+            c.icon_wheel_handler = lambda d: self.icon_wheel_handler is not None and self.icon_wheel_handler(d)
+            c.backRequested.connect(self.go_back)
+            c.forwardRequested.connect(self.go_forward)
+            c.newTabRequested.connect(self.openInNewTab.emit)
+            c.dropRequested.connect(self.tree.dropRequested.emit)
+            c.renameFailed.connect(self._rename_failed)
             self._lay.insertWidget(2, c, 1)
         if self.columns is not None:
             self.columns.setVisible(want)
@@ -656,6 +675,9 @@ class FolderView(QWidget):
                 parent = os.path.dirname(p)
                 p = None if parent == p else parent
             self.navigate(p or DRIVES, record=False)
+            return
+        if self._searched and self.filter_text():
+            self._search_timer.start()         # searching: refresh the results, not the folder
             return
         if self.columns is not None:
             self.columns.set_show_hidden(bool(self.config.get("show_hidden")))
@@ -796,25 +818,9 @@ class FolderView(QWidget):
             sm.setCurrentIndex(self.proxy.index(0, 0), QItemSelectionModel.SelectionFlag.NoUpdate)
 
     def edit_current(self):
-        """Rename the current item (inline in the list, a small dialog in columns view)."""
+        """Rename the current item in place (list and columns)."""
         if self.columns_active():
-            es = self.selected_entries()
-            if len(es) == 1 and not es[0].is_drive:
-                from PySide6.QtWidgets import QInputDialog
-                name, ok = QInputDialog.getText(self, "Rename", "New name:", text=es[0].name)
-                name = name.strip().rstrip(".")
-                if ok and name and name != es[0].name:
-                    from .model import name_problem
-                    if name_problem(name):
-                        self._rename_failed(name_problem(name))
-                        return
-                    new = os.path.join(os.path.dirname(es[0].path), name)
-                    try:
-                        os.rename(es[0].path, new)
-                        tags.store().renamed(es[0].path, new)
-                        self.columns.show_path(self.path, new)
-                    except OSError as ex:
-                        self._rename_failed(f"Couldn't rename: {ex.strerror or ex}")
+            self.columns.edit_current()        # in place, like the list
             return
         idx = self.tree.currentIndex()
         if idx.isValid():
@@ -858,6 +864,48 @@ class FolderView(QWidget):
         self.filter_edit.show()
         self.filter_edit.setText(self.filter_edit.text() + text)
 
+    def search_on(self) -> bool:
+        """Typing searches subfolders too: on in Settings, a real folder, Everything running."""
+        p = self.path or ""
+        return bool(self.config.get("everything_search")) and not places.is_special(p) \
+            and not places.is_server(p) and everything.is_running()
+
+    def _column_typed(self, text: str) -> bool:
+        """Columns view: typed letters start a search of the deepest open folder."""
+        if not self.search_on():
+            return False
+        self.type_into_filter(text)
+        self.tree.setFocus()
+        return True
+
+    def _run_search(self):
+        """Ask Everything for matches anywhere under this folder; they replace the list."""
+        text = self.filter_text().strip()
+        if not text or not self.search_on():
+            return
+        c = everything.client()
+        if c is None:
+            return
+        self._search_token += 1
+        token, folder = self._search_token, self.path
+
+        def got(results, token=token):
+            if token != self._search_token or self.path != folder or not self.filter_text():
+                return
+            entries = []
+            for path, size, is_dir, mtime in results:
+                e = Entry(os.path.basename(path), path, is_dir, size, mtime)
+                rel = os.path.relpath(os.path.dirname(path), folder)
+                e.where = "" if rel == "." else rel
+                entries.append(e)
+            self._searched = True
+            self.model.set_entries(folder, entries)
+            self.proxy.set_filter("")          # Everything matched them (words, wildcards...)
+            if self.proxy.rowCount():
+                self.tree.setCurrentIndex(self.proxy.index(0, 0))
+            self.selectionChanged.emit()
+        c.search_under(folder, text, got)
+
     def chop_filter(self):
         self.filter_edit.setText(self.filter_edit.text()[:-1])
 
@@ -870,6 +918,18 @@ class FolderView(QWidget):
         self.filter_edit.selectAll()
 
     def _filter_changed(self, text):
+        if self.columns is not None and self.mode == "columns":
+            had_focus = self.tree.hasFocus()
+            self._sync_mode_widgets()          # searching shows a list; done, the columns again
+            if not text and had_focus:
+                self.focus_list()
+        if text and self.search_on():
+            self._search_timer.start()         # this folder's own matches now, subfolders in 150 ms
+        elif not text and self._searched:
+            self._searched = False             # search over: back to the folder itself
+            self._search_timer.stop()
+            self._search_token += 1
+            self._load([], None)
         self.proxy.set_filter(text)
         self.filter_edit.setVisible(bool(text) or self.filter_edit.hasFocus())
         if self.proxy.rowCount():

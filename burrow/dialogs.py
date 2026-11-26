@@ -343,6 +343,7 @@ class SettingsDialog(QDialog):
         ev_box = QGroupBox("Everything (voidtools)")
         ev = QFormLayout(ev_box)
         ev.addRow(check("everything_sizes", "Show folder sizes from Everything"))
+        ev.addRow(check("everything_search", "Typing searches the open folder and its subfolders"))
         ev.addRow(note("✓ Everything is running. Folder sizes need “Index folder size” in Everything's options."
                        if everything.is_running() else
                        "⚠ Everything isn't running. Start it and folder sizes appear automatically."))
