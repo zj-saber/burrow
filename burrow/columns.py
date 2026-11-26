@@ -200,6 +200,9 @@ class _Column(QListView):
         if not mods and k == Qt.Key.Key_Left:
             self.owner.go_out()
             return
+        if not mods and k in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.owner._activated(self.owner.currentIndex())     # folder: in; file: open
+            return
         if not mods and k in STEP_KEYS:
             self.owner.step(k)                   # ↑ ↓ PgUp PgDn Home End: always in the column
             return                               # that holds the current item, never Qt's own
@@ -229,8 +232,20 @@ class _Column(QListView):
                 self.owner.newTabRequested.emit(self.owner.path_of(idx))
             return
         super().mousePressEvent(ev)
-        if self.isVisible():
-            self.setFocus()                      # the keys follow the column you clicked
+        idx = self.indexAt(ev.position().toPoint())
+        if idx.isValid() and b == Qt.MouseButton.LeftButton and not ev.modifiers():
+            self.owner._go_to(idx)               # the cursor and the keys go where you clicked
+        elif self.isVisible():
+            self.setFocus()
+
+    def mouseDoubleClickEvent(self, ev):
+        """Double-click: a folder opens (its first item gets the cursor), a file opens in its app."""
+        if ev.button() != Qt.MouseButton.LeftButton:
+            return super().mouseDoubleClickEvent(ev)
+        idx = self.indexAt(ev.position().toPoint())
+        if idx.isValid():
+            self.owner._activated(idx)
+        ev.accept()
 
     def hideEvent(self, ev):
         """Qt closes columns by hiding them: if the keyboard was here, hand it to the column
@@ -291,6 +306,7 @@ class ColumnsView(QColumnView):
     openRequested = Signal(list)      # Enter / double-click on files
     contextMenu = Signal(object)      # pos in viewport coordinates
     dropRequested = Signal(list, str, bool)   # sources, target folder, move?
+    columnSelectionChanged = Signal()         # a column's own selection changed (Ctrl/Shift-click)
     renameFailed = Signal(str)
     backRequested = Signal()
     forwardRequested = Signal()
@@ -347,10 +363,10 @@ class ColumnsView(QColumnView):
         """Each column is a _Column wired to the window's menu, actions and icon size."""
         col = _Column(self, self.viewport())    # our own list: smooth scrolling and arrow keys
         self.initializeColumn(col)
-        # one selection for every column (Qt leaves new columns with one of their own, so ↑/↓
-        # moved a highlight the view never saw and the arrows seemed dead)
-        if self.selectionModel() is not None:
-            col.setSelectionModel(self.selectionModel())
+        # Each column keeps its own selection, as Qt designs it (sharing the view's let Python
+        # delete it with the first column that closed). The view's current item is the cursor;
+        # _mark() shows it in its column. Ctrl/Shift-clicks in a column report here.
+        col.selectionModel().selectionChanged.connect(lambda *_: self.columnSelectionChanged.emit())
         col.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         col.verticalScrollBar().setSingleStep(max(16, self._delegate.height) if hasattr(self, "_delegate") else 24)
         col.setRootIndex(index)
@@ -442,10 +458,11 @@ class ColumnsView(QColumnView):
         self._quiet = True
         try:
             self.setCurrentIndex(idx)
-            self.selectionModel().select(idx, self.selectionModel().SelectionFlag.ClearAndSelect)
+            self._mark(idx)
             self.scrollTo(idx)
         finally:
             self._quiet = False
+        QTimer.singleShot(0, lambda: self._mark(self.currentIndex()))   # its column may be new
 
     def select_path(self, path: str):
         """Select one item (after a rename), keeping the columns where they are."""
@@ -472,16 +489,22 @@ class ColumnsView(QColumnView):
         if not cur.isValid():
             return []
         parent = cur.parent()
-        rows = [i for i in self.selectionModel().selectedIndexes() if i.column() == 0 and i.parent() == parent]
+        col = self.column_for(parent)
+        sm = col.selectionModel() if col is not None else None
+        rows = [i for i in sm.selectedIndexes() if i.column() == 0 and i.parent() == parent] if sm else []
         rows.sort(key=lambda i: i.row())
-        return [self.path_of(i) for i in rows] or [self.path_of(cur)]
+        paths = [self.path_of(i) for i in rows]
+        return paths if self.path_of(cur) in paths else [self.path_of(cur)]
 
     def select_all_in_column(self):
         cur = self.currentIndex()
         if not cur.isValid():
             return
         parent = cur.parent()
-        sm = self.selectionModel()
+        col = self.column_for(parent)
+        if col is None or col.selectionModel() is None:
+            return
+        sm = col.selectionModel()
         n = self.fs.rowCount(parent)
         if n:
             from PySide6.QtCore import QItemSelection
@@ -615,13 +638,30 @@ class ColumnsView(QColumnView):
         if target != row:
             self._go_to(self.fs.index(target, 0, parent))
 
-    def _go_to(self, idx: QModelIndex):
-        self.setCurrentIndex(idx)
-        self.selectionModel().select(idx, self.selectionModel().SelectionFlag.ClearAndSelect)
+    def _mark(self, idx: QModelIndex):
+        """Show the cursor in its column: that column's own current item and selection."""
+        if not idx.isValid():
+            return
         col = self.column_for(idx.parent())
-        if col is not None:
+        if col is None:
+            return
+        sm = col.selectionModel()
+        if sm is not None and (sm.currentIndex() != idx or not sm.isSelected(idx)):
+            sm.setCurrentIndex(idx, sm.SelectionFlag.ClearAndSelect)
+        return col
+
+    def _go_to(self, idx: QModelIndex, focus: bool = True):
+        """Move the cursor (the view's current item) to idx: the columns follow."""
+        if not idx.isValid():
+            return
+        self.setCurrentIndex(idx)
+        col = self._mark(idx)
+        if col is None:                          # its column is being made: mark it next turn
+            QTimer.singleShot(0, lambda: self._go_to(idx, focus) if self.column_for(idx.parent()) else None)
+            return
+        if focus:
             col.setFocus()
-            col.scrollTo(idx)
+        col.scrollTo(idx)
 
     def go_in(self):
         """→: into the selected folder (its first item). A folder still being read is entered
@@ -684,6 +724,8 @@ class ColumnsView(QColumnView):
         if not idx.isValid():
             return
         if self.fs.isDir(idx):
+            if self.currentIndex() != idx:
+                self._go_to(idx)
             self.go_in()
         else:
             self.openRequested.emit(self.selected_paths())

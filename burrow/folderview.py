@@ -607,6 +607,7 @@ class FolderView(QWidget):
             c.openRequested.connect(lambda paths: self.open_entries(DirModel.fetch_paths(paths)))
             c.contextMenu.connect(lambda pos: self.contextMenuRequested.emit(pos))
             c.selectionModel().selectionChanged.connect(lambda *_: self.selectionChanged.emit())
+            c.columnSelectionChanged.connect(self.selectionChanged.emit)
             c.extra_actions = list(self.tree.actions())   # Ctrl+C, Del, F2... work in columns too
             c.set_show_sizes(bool(self.config.get("columns_sizes")), bool(self.config.get("everything_sizes")))
             c.set_hover_color(self.tree.hover_color)

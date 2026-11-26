@@ -675,7 +675,9 @@ class MainWindow(QMainWindow):
         self.view_mode_btn.setObjectName("statusToggle")
         self.view_mode_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.view_mode_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.view_mode_btn.clicked.connect(self._view_mode_menu)
+        self.view_mode_btn.clicked.connect(self._next_view_mode)
+        self.view_mode_btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.view_mode_btn.customContextMenuRequested.connect(lambda _p: self._view_mode_menu())
         # icon size slider (16-64 px), live for every tab in every window
         from PySide6.QtWidgets import QSlider
         self.icon_small = QLabel("□")
@@ -1446,7 +1448,7 @@ class MainWindow(QMainWindow):
         self.sort_mode_btn.setText("Sort: mixed" if mixed else "Sort: folders first")
         self.sort_mode_btn.setVisible(bool(self.config.get("status_sort_toggle")) and not v.columns_active())
         self.view_mode_btn.setText("View: " + dict(self.VIEW_MODES)[v.mode].split(" ")[0].lower())
-        self.view_mode_btn.setToolTip("List, columns, thumbnails or river (photos) for this tab")
+        self.view_mode_btn.setToolTip("Click for the next view (list, columns, thumbnails, river). Right-click to pick one.")
         self.sort_mode_btn.setToolTip("Files, folders and archives sorted together by the column — click for folders first"
                                       if mixed else "Folders on top, then files — click to sort everything by the column only")
 
@@ -1466,6 +1468,12 @@ class MainWindow(QMainWindow):
         mode = self.view().mode
         for a, m in ((self.act_columns_view, "columns"), (self.act_thumbs_view, "thumbs"), (self.act_river_view, "river")):
             a.setChecked(mode == m)
+
+    def _next_view_mode(self):
+        """The status bar's View button: list → columns → thumbnails → river → list."""
+        modes = [m for m, _t in self.VIEW_MODES]
+        cur = self.view().mode if self.view() is not None else "list"
+        self.set_view_mode(modes[(modes.index(cur) + 1) % len(modes)] if cur in modes else "list")
 
     def _view_mode_menu(self):
         """The status bar's View button: pick one of the four views."""

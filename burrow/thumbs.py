@@ -19,7 +19,8 @@ import os
 import threading
 from collections import OrderedDict
 
-from PySide6.QtCore import QObject, QRect, QRectF, QRunnable, QSize, Qt, QThreadPool, QTimer, Signal, Slot
+from PySide6.QtCore import (QModelIndex, QObject, QPoint, QRect, QRectF, QRunnable, QSize, Qt, QThreadPool,
+                            QTimer, Signal, Slot)
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPalette, QPixmap
 from PySide6.QtWidgets import QAbstractItemView, QListView, QStyle, QStyledItemDelegate
 
@@ -29,6 +30,17 @@ from .model import ENTRY_ROLE
 THUMB_PX = 320                      # made once at this size, scaled down when drawn
 CACHE_BYTES = 96 << 20              # ~96 MB of pictures at most, oldest dropped first
 WORKERS = 3
+
+
+def _qt_image_exts() -> set:
+    from PySide6.QtGui import QImageReader
+    global _EXTS
+    if _EXTS is None:
+        _EXTS = {bytes(f.data()).decode().lower() for f in QImageReader.supportedImageFormats()}
+    return _EXTS
+
+
+_EXTS = None
 
 
 # ----- the loader ---------------------------------------------------------------------------
@@ -140,6 +152,29 @@ class ThumbLoader(QObject):
         self._cache.clear()
         self._bytes = 0
         self._failed.clear()
+
+
+# River needs each picture's shape before its thumbnail exists: read just the image header
+# (a few KB) for every picture in the folder, on a worker thread. path -> width / height.
+ASPECTS: dict = {}
+
+
+def read_aspects(paths: list[str]) -> dict:
+    from PySide6.QtGui import QImageReader
+    out = {}
+    for p in paths:
+        r = QImageReader(p)
+        r.setAutoTransform(True)                 # phone photos stored sideways
+        s = r.size()
+        if s.isValid() and s.height() > 0:
+            w, h = s.width(), s.height()
+            try:
+                if int(r.transformation().value) & 0x4:   # rotated 90°: swap
+                    w, h = h, w
+            except (AttributeError, TypeError, ValueError):
+                pass
+            out[p] = w / h
+    return out
 
 
 _loader: ThumbLoader | None = None
@@ -371,6 +406,15 @@ class ThumbView(_Extras, QListView):
         self._relayout.setInterval(120)
         self._relayout.timeout.connect(self._redo_layout)
         loader().ready.connect(self._thumbs_arrived)
+        self._shapes_token = 0
+        if river:
+            owner.proxy.modelReset.connect(self._read_shapes)
+            owner.proxy.layoutChanged.connect(self._read_shapes)
+
+    def showEvent(self, ev):
+        super().showEvent(ev)
+        if self.river:
+            self._read_shapes()                  # the folder may have loaded before River was on
 
     # sizes ------------------------------------------------------------------------------------
     def set_size(self, icon_px: int):
@@ -394,10 +438,13 @@ class ThumbView(_Extras, QListView):
         """Width / height of the picture (known once its thumbnail is made)."""
         if e is None or e.is_dir or e.is_drive:
             return 1.0
-        pm = loader().peek(e.path, e.mtime)
-        if pm is None or not pm.height():
-            return 1.5
-        return max(0.4, min(3.0, pm.width() / pm.height()))
+        a = ASPECTS.get(e.path)
+        if a is None:
+            pm = loader().peek(e.path, e.mtime)
+            if pm is None or not pm.height():
+                return 1.5
+            a = pm.width() / pm.height()
+        return max(0.4, min(3.0, a))
 
     def thumb_for(self, e):
         if e is None or e.is_dir or e.is_drive:
@@ -405,20 +452,67 @@ class ThumbView(_Extras, QListView):
         return loader().get(e.path, e.mtime)          # queued if missing; drawn when ready
 
     # repaint / relayout as pictures arrive ------------------------------------------------------
+    def _read_shapes(self):
+        """River: read every picture's shape (headers only, off the GUI thread), then lay out once."""
+        from . import places
+        model = self.owner.model
+        todo = [e.path for e in model.entries if not e.is_dir and e.path not in ASPECTS
+                and os.path.splitext(e.name)[1][1:].lower() in _qt_image_exts()][:5000]
+        if not todo or places.is_remote(todo[0]):
+            return
+        self._shapes_token += 1
+        token = self._shapes_token
+
+        def done(res, token=token):
+            if isinstance(res, dict):
+                ASPECTS.update(res)
+            if token == self._shapes_token:
+                self._redo_layout()
+        places.run_async(lambda: read_aspects(todo), done)
+
     def _thumbs_arrived(self):
         if not self.isVisible():
             return
-        if self.river:
-            self._relayout.start()
+        if self.river and self._needs_shapes():
+            self._relayout.start()               # only pictures Qt can't read (HEIC, RAW...)
         self.viewport().update()
 
+    def _needs_shapes(self) -> bool:
+        """A picture on show still has a guessed shape that its new thumbnail can correct."""
+        found = False
+        for e in self.owner.model.entries:
+            if not e.is_dir and e.path not in ASPECTS:
+                pm = loader().peek(e.path, e.mtime)
+                if pm is not None:
+                    ASPECTS[e.path] = pm.width() / max(1, pm.height())
+                    found = True
+        return found
+
+    def _top_item(self):
+        """The first item showing at the top (searched across the row, past the gaps)."""
+        vw = self.viewport().width()
+        for y in (4, 12, 24, 48):
+            for x in range(4, max(5, vw), 24):
+                idx = self.indexAt(QPoint(x, y))
+                if idx.isValid():
+                    return idx
+        return QModelIndex()
+
     def _redo_layout(self):
-        cur = self.currentIndex()
-        top = self.indexAt(self.viewport().rect().topLeft() + QRect(0, 0, 8, 8).center())
+        """Re-flow the rows, keeping the same pictures where they were on screen."""
+        top = self._top_item()
+        off = self.visualRect(top).top() if top.isValid() else 0
+        value = self.verticalScrollBar().value()
         self.doItemsLayout()
-        anchor = top if top.isValid() else cur
-        if anchor.isValid():
-            self.scrollTo(anchor, QAbstractItemView.ScrollHint.PositionAtTop)
+
+        def restore():
+            vb = self.verticalScrollBar()
+            if top.isValid():
+                vb.setValue(vb.value() + self.visualRect(top).top() - off)
+            else:
+                vb.setValue(value)
+        restore()
+        QTimer.singleShot(0, restore)            # again once Qt has finished the layout
 
 
 # ----- columns view: search results as one wide column ---------------------------------------
