@@ -9,7 +9,7 @@ from PySide6.QtGui import QColor, QPainter, QPalette
 from PySide6.QtWidgets import (QAbstractItemView, QFrame, QHeaderView, QLabel, QLineEdit, QMenu,
                                QStyle, QStyledItemDelegate, QTreeView, QVBoxLayout, QWidget)
 
-from . import dialogs, everything, fileops, places, tags, theme
+from . import dialogs, everything, fileops, marks, places, tags, theme
 from .config import COLUMN_TITLES, COLUMNS, DEFAULT_WIDTHS, Config
 from .model import DRIVES, ENTRY_ROLE, NETWORK, DirModel, Entry, FilterProxy
 
@@ -90,6 +90,11 @@ class RowDelegate(QStyledItemDelegate):
                                       1 - e.free / e.size)
                 return
         super().paint(painter, option, index)
+        if marks.MARKS:                        # copied / cut / being pasted: a faint tint
+            e = index.data(ENTRY_ROLE)
+            k = marks.MARKS.get(e.path.lower()) if e is not None else None
+            if k:
+                painter.fillRect(option.rect, marks.color(k))
 
 
 class NameDelegate(RowDelegate):

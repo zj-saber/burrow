@@ -11,6 +11,7 @@ from PySide6.QtGui import QAction, QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (QApplication, QComboBox, QCompleter, QDockWidget, QFileDialog,
                                QFileSystemModel, QHBoxLayout, QLabel, QMainWindow, QMenu,
                                QMessageBox, QProgressDialog, QSizePolicy, QStyle, QToolButton,
+                               QAbstractItemView,
                                QVBoxLayout, QWidget)
 from PySide6.QtCore import QItemSelection, QItemSelectionModel
 
@@ -267,17 +268,44 @@ def trim_memory():
         k32.SetProcessWorkingSetSize(k32.GetCurrentProcess(), ctypes.c_size_t(-1).value, ctypes.c_size_t(-1).value)
 
 
+def _repaint_lists():
+    """Clipboard tints changed: repaint the visible lists (cheap: only what's on screen)."""
+    for w in WINDOWS:
+        for p in w.panes:
+            v = p.tabs.currentWidget()
+            if v is not None:
+                v.tree.viewport().update()
+                if v.columns is not None:
+                    for c in v.columns.findChildren(QAbstractItemView):
+                        c.viewport().update()
+
+
 def _startup_chores(win):
-    """A while after start: tidy up after an update and, once a day, look for a new release."""
-    import time
+    """A while after start: tidy up after an update and look for a new release."""
     if getattr(sys, "frozen", False):
         from . import updater
         updater.cleanup()
         updater.sync_registered_version()
+    maybe_check_updates(win)
+
+
+UPDATE_EVERY = 12 * 3600          # automatic checks at most this often
+_last_attempt = [0.0]
+
+
+def maybe_check_updates(win):
+    """At start and whenever a window comes up (Burrow may live in the tray for weeks): look for
+    a new release if the last check is old. Attempts are spaced too, so being offline doesn't
+    mean a request on every activation."""
+    import time
     cfg = win.config
-    if cfg.get("check_updates") and time.time() - float(cfg.get("update_checked") or 0) > 86400:
-        from . import updater
-        updater.auto_check(win)
+    now = time.time()
+    if not cfg.get("check_updates") or now - _last_attempt[0] < 3600 \
+            or now - float(cfg.get("update_checked") or 0) < UPDATE_EVERY:
+        return
+    _last_attempt[0] = now
+    from . import updater
+    updater.auto_check(win)
 
 
 def open_new_window(config, paths=None):
@@ -320,6 +348,8 @@ class MainWindow(QMainWindow):
         self._make_ui()
         self._make_menus()
         self.apply_theme()
+        from . import marks
+        marks.install(_repaint_lists)
         self.apply_ui_switches()
         self._listing_key = (config.get("show_hidden"), config.get("date_format"), config.get("everything_sizes"))
         try:
@@ -430,6 +460,7 @@ class MainWindow(QMainWindow):
         self.act_compare = A("Compare && sync folders…", self.open_compare)
         self.act_dupes = A("Find duplicates…", self.open_duplicates)
         self.act_bulk_rename = A("Rename selected…", self.open_bulk_rename, "Ctrl+Shift+F2")
+        self.act_folderize = A("Folders for loose files…", self.folderize, "Ctrl+Alt+F")
 
         T = lambda *a, **k: self._action(*a, tree=True, **k)  # noqa: E731
         self.act_open = T("Open", lambda: self.view().open_entries(self.view().selected_entries()))
@@ -592,7 +623,6 @@ class MainWindow(QMainWindow):
         self.status_left = QLabel()
         self.status_right = QLabel()
         self.statusBar().setSizeGripEnabled(False)
-        self.statusBar().addWidget(self.status_left, 1)
         # Sorting toggle (FilePilot-style): folders on top, or everything mixed by the column
         self.sort_mode_btn = QToolButton()
         self.sort_mode_btn.setObjectName("statusToggle")
@@ -601,14 +631,12 @@ class MainWindow(QMainWindow):
         self.sort_mode_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.sort_mode_btn.toggled.connect(self._sort_mode_toggled)
         self.config.viewChanged.connect(self._view_preset_changed)
-        self.statusBar().addPermanentWidget(self.sort_mode_btn)
         self.view_mode_btn = QToolButton()
         self.view_mode_btn.setObjectName("statusToggle")
         self.view_mode_btn.setCheckable(True)
         self.view_mode_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.view_mode_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.view_mode_btn.toggled.connect(lambda on: self.set_view_mode("columns" if on else "list"))
-        self.statusBar().addPermanentWidget(self.view_mode_btn)
         # icon size slider (16-64 px), live for every tab in every window
         from PySide6.QtWidgets import QSlider
         self.icon_small = QLabel("□")
@@ -625,18 +653,49 @@ class MainWindow(QMainWindow):
         self.icon_slider.valueChanged.connect(self.set_icon_size)
         self.icon_big = QLabel("□")
         self.icon_big.setStyleSheet("font-size: 13pt; padding: 0 8px 0 2px;")
-        for wdg in (self.icon_small, self.icon_slider, self.icon_big):
-            self.statusBar().addPermanentWidget(wdg)
         self.update_btn = QToolButton()               # shown when a new release is out
         self.update_btn.setObjectName("statusToggle")
         self.update_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.update_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.update_btn.hide()
-        self.statusBar().addPermanentWidget(self.update_btn)
         self.usage_pill = UsagePill()
         self.usage_pill.hide()
-        self.statusBar().addPermanentWidget(self.usage_pill)
-        self.statusBar().addPermanentWidget(self.status_right)
+        self.folder_btn = QToolButton()                # Tools ▸ Folders for loose files
+        self.folder_btn.setObjectName("statusToggle")
+        self.folder_btn.setText("Auto folder")
+        self.folder_btn.setToolTip("Put each loose file in a folder named after it; a movie and its "
+                                   "subtitles share one (Ctrl+Alt+F)")
+        self.folder_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.folder_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.folder_btn.clicked.connect(self.folderize)
+
+        # One row: counts on the left, the switches centred, slider / storage / update on the
+        # right. It's a single permanent widget, so status messages are shown in the left
+        # label (see _status_message) instead of replacing the row.
+        from PySide6.QtWidgets import QGridLayout
+        row = QWidget()
+        g = QGridLayout(row)
+        g.setContentsMargins(4, 0, 4, 0)
+        g.setHorizontalSpacing(6)
+        self.status_left.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        g.addWidget(self.status_left, 0, 0)
+        mid = QHBoxLayout()
+        mid.setSpacing(6)
+        for wdg in (self.sort_mode_btn, self.view_mode_btn, self.folder_btn):
+            mid.addWidget(wdg)
+        g.addLayout(mid, 0, 1)
+        right = QHBoxLayout()
+        right.setSpacing(4)
+        right.addStretch(1)
+        for wdg in (self.icon_small, self.icon_slider, self.icon_big, self.usage_pill, self.status_right,
+                    self.update_btn):
+            right.addWidget(wdg)
+        g.addLayout(right, 0, 2)
+        g.setColumnStretch(0, 1)
+        g.setColumnStretch(2, 1)
+        self.statusBar().addPermanentWidget(row, 1)
+        self._status_text = ""
+        self.statusBar().messageChanged.connect(self._status_message)
 
     def _make_menus(self):
         mb = self.menuBar()
@@ -677,7 +736,7 @@ class MainWindow(QMainWindow):
         t = mb.addMenu("&Tools")
         t.aboutToShow.connect(lambda: (self.act_default_fm.setChecked(integration.is_default()),
                                        self.act_win_e.setChecked(bool(self.config.get("win_e")))))
-        for a in (self.act_compare, self.act_dupes, self.act_bulk_rename, None,
+        for a in (self.act_compare, self.act_dupes, self.act_bulk_rename, self.act_folderize, None,
                   self.act_terminal, self.act_explorer, self.act_properties, None,
                   self.act_map_drive, self.act_unmap_drive, None, self.act_default_fm, self.act_win_e, None,
                   self.act_updates, self.act_settings):
@@ -1279,8 +1338,14 @@ class MainWindow(QMainWindow):
             if sized:
                 s += f" · {human_size(sum(e.size for e in sized))}"
             parts.append(s)
-        self.status_left.setText("     ".join(parts))
+        self._status_text = "     ".join(parts)
+        if not self.statusBar().currentMessage():
+            self.status_left.setText(self._status_text)
         self._sync_sort_mode(v)
+
+    def _status_message(self, text: str):
+        """showMessage() text goes in the left label for a while, then the counts come back."""
+        self.status_left.setText(text or self._status_text)
 
     def _sync_sort_mode(self, v=None):
         v = v or self.view()
@@ -1400,10 +1465,13 @@ class MainWindow(QMainWindow):
         """Settings switches for the status bar, sidebar dragging, preview handle and keys."""
         c = self.config
         self.view_mode_btn.setVisible(bool(c.get("status_view_toggle")))
+        self.folder_btn.setVisible(bool(c.get("status_folder_button")))
         for wdg in (self.icon_small, self.icon_slider, self.icon_big):
             wdg.setVisible(bool(c.get("status_icon_slider")))
         self.sidebar.drag_reorder = bool(c.get("sidebar_drag_reorder"))
         self.sidebar.show_eject = bool(c.get("sidebar_eject"))
+        from . import marks
+        marks.set_enabled(bool(c.get("clipboard_marks")))
         self.usage_pill.on = bool(c.get("status_storage_bar"))
         if not self.usage_pill.on:
             self.usage_pill.hide()
@@ -1733,6 +1801,8 @@ class MainWindow(QMainWindow):
         if not plan:
             return False
         runner = JobRunner(self, plan, move)
+        from . import marks
+        marks.add_pasting([d for _s, d, _m in plan])      # green while they're being written
         runner.finished.connect(self._job_finished)
         self.jobs.append(runner)
         runner.start()
@@ -1785,6 +1855,8 @@ class MainWindow(QMainWindow):
         return plan
 
     def _job_finished(self, runner):
+        from . import marks
+        marks.remove_pasting([d for _s, d, _m in runner.job.plan])
         for src, dst, _mode in runner.job.plan:      # tags follow items Burrow moved or copied
             if os.path.lexists(dst):
                 if runner.move and not os.path.lexists(src):
@@ -2050,11 +2122,9 @@ class MainWindow(QMainWindow):
         for w in WINDOWS:
             w.update_btn.setText(f"Update to {info['version']}")
             w.update_btn.setToolTip("A new version of Burrow is out. Click to see what's new.")
-            try:
-                w.update_btn.clicked.disconnect()
-            except (RuntimeError, TypeError):
-                pass
-            w.update_btn.clicked.connect(lambda _=False, w=w: w._open_update(info))
+            if getattr(w, "_update_info", None) is None:
+                w.update_btn.clicked.connect(lambda _=False, w=w: w._open_update(w._update_info))
+            w._update_info = info
             w.update_btn.show()
 
     def _open_update(self, info):
@@ -2086,6 +2156,29 @@ class MainWindow(QMainWindow):
         from .tools.duplicates import DuplicatesWindow
         sel = [e.path for e in self._selected() if e.is_dir]
         DuplicatesWindow.open(self.config, sel or self._tool_paths()[:1], self)
+
+    def folderize(self):
+        """Each loose file into a folder named after it; files sharing a name (a movie and its
+        subtitles) share the folder. Works on the selected files, or every file here."""
+        v = self.view()
+        if v is None or not v.path or is_location(v.path):
+            self.statusBar().showMessage("Open a folder first", 4000)
+            return
+        sel = [e.path for e in self._selected() if not e.is_dir]
+        paths = sel or [e.path for e in v.model.entries if not e.is_dir and not e.is_drive]
+        from .tools import folderize
+        groups = folderize.plan(paths)
+        if not groups:
+            self.statusBar().showMessage("No loose files here", 4000)
+            return
+        if not folderize.FolderizeDialog(v.path, groups, self).exec():
+            return
+        errors = folderize.apply(v.path, groups)
+        self.refresh_view()
+        if errors:
+            QMessageBox.warning(self, APP_NAME, f"{len(errors)} file(s) couldn't be moved:\n\n" + "\n".join(errors[:12]))
+        else:
+            self.statusBar().showMessage(f"Made {len(groups)} folder(s)", 5000)
 
     def open_bulk_rename(self):
         sel = self._selected()
@@ -2145,6 +2238,7 @@ class MainWindow(QMainWindow):
         super().changeEvent(ev)
         if ev.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
             self.sidebar._check_drives()       # cheap; catches anything missed while away
+            QTimer.singleShot(3000, self, lambda: maybe_check_updates(self))
             if self in LAST_ACTIVE:
                 LAST_ACTIVE.remove(self)
             LAST_ACTIVE.append(self)

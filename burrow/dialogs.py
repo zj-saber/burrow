@@ -251,6 +251,7 @@ class SettingsDialog(QDialog):
         f.addRow("New tabs open as:", self.view_mode)
         f.addRow(check("ctrl_wheel_icon_size", "Ctrl+mouse wheel changes the icon size"))
         f.addRow(check("drive_usage_bars", "This PC shows how full each drive is"))
+        f.addRow(check("clipboard_marks", "Tint copied (cyan), cut (yellow) and pasting (green) items"))
         f.addRow(check("bulk_rename_f2", "F2 with several items selected opens Bulk rename"))
         f.addRow(check("context_archive", "Extract and Add to archive in the right-click menu",
                        "Uses NanaZip or 7-Zip, else WinRAR, else Windows' built-in tar."))
@@ -260,6 +261,7 @@ class SettingsDialog(QDialog):
         fb.addRow(check("status_view_toggle", "View switch (list / columns)"))
         fb.addRow(check("status_icon_slider", "Icon size slider"))
         fb.addRow(check("status_storage_bar", "Storage pill (how full the drive is)"))
+        fb.addRow(check("status_folder_button", "Auto folder button (folders for loose files)"))
         side = QGroupBox("Sidebar sections")
         f = QFormLayout(side)
         f.addRow(check("sidebar_places", "Places (Home, Desktop, Documents…)"))
@@ -324,7 +326,7 @@ class SettingsDialog(QDialog):
 
         upd = QGroupBox("Updates")
         f = QFormLayout(upd)
-        f.addRow(check("check_updates", "Check for a new version once a day",
+        f.addRow(check("check_updates", "Check for new versions automatically",
                        "Asks GitHub for the latest Burrow release. Nothing else is sent."))
         from . import __version__
         now = QPushButton("Check now")

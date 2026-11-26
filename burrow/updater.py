@@ -1,6 +1,6 @@
 """Update Burrow from its GitHub releases without leaving the app.
 
-Loaded only when an update check runs (once a day at most, or from the menu). Downloads use
+Loaded only when an update check runs (every 12 hours at most, or from the menu). Downloads use
 Qt's own networking with Windows' TLS (schannel), so the build needs no OpenSSL. Installing:
 the new build is unpacked to %TEMP%, a tiny script waits for Burrow to quit, copies the files
 over the install folder and starts the new version.

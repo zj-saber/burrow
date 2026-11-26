@@ -28,6 +28,11 @@ class _RowDelegate(QStyledItemDelegate):
             opt = QStyleOptionViewItem(option)
             opt.rect = option.rect.adjusted(0, 0, -12, 0)      # keep the name clear of it
         super().paint(painter, opt, index)
+        from . import marks
+        if marks.MARKS:
+            k = marks.MARKS.get(os.path.normpath(index.model().filePath(index)).lower())
+            if k:
+                painter.fillRect(option.rect, marks.color(k))
         if is_dir:
             r = option.rect
             c = QColor(option.palette.color(QPalette.ColorRole.Text))
