@@ -1554,6 +1554,9 @@ class MainWindow(QMainWindow):
                           self.act_copy_to, self.act_move_to, None,
                           self.act_rename, self.act_delete, self.act_delete_perm):
                     m.addSeparator() if a is None else m.addAction(a)
+                if self.config.get("context_archive") and not any(places.is_remote(e.path) and
+                                                                  places.is_server(e.path) for e in entries):
+                    self._add_archive_menu(m, [e.path for e in entries])
             plain = [e for e in entries if not e.is_drive]
             if plain:
                 m.addSeparator()
@@ -1590,6 +1593,43 @@ class MainWindow(QMainWindow):
         m.exec(where)
 
     # ----- file operations ---------------------------------------------------------------
+    # ----- archives: Extract here / Extract to folder / Add to archive ---------------------
+    def _add_archive_menu(self, m: QMenu, paths: list[str]):
+        from . import extract
+        if extract.tool() is None:
+            return
+        m.addSeparator()
+        if all(extract.is_archive(p) for p in paths):
+            m.addAction("Extract here").triggered.connect(lambda: self.run_extract(paths, False))
+            label = (f"Extract to \"{extract.folder_name(paths[0])}\\\"" if len(paths) == 1
+                     else "Extract each to its own folder")
+            m.addAction(label).triggered.connect(lambda: self.run_extract(paths, True))
+        m.addAction("Add to archive…").triggered.connect(lambda: self.run_compress(paths))
+
+    def _archive_job(self, fn):
+        """tar.exe runs without a window: do it in the background, then refresh."""
+        self.statusBar().showMessage("Working on the archive…")
+
+        def done(res):
+            self.statusBar().clearMessage()
+            errors = [str(res)] if isinstance(res, Exception) else res
+            if errors:
+                QMessageBox.warning(self, APP_NAME, "The archive couldn't be processed:\n\n" + "\n".join(errors[:8]))
+            self.refresh_view()
+        places.run_async(fn, done)
+
+    def run_extract(self, paths, to_folder):
+        from . import extract
+        err = extract.extract(paths, to_folder, self._archive_job)
+        if err:
+            QMessageBox.warning(self, APP_NAME, err)
+
+    def run_compress(self, paths):
+        from . import extract
+        err = extract.compress(paths, self._archive_job)
+        if err:
+            QMessageBox.warning(self, APP_NAME, err)
+
     def rename_selected(self):
         if len(self._selected()) > 1 and self.config.get("bulk_rename_f2"):
             self.open_bulk_rename()

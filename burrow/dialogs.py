@@ -252,6 +252,8 @@ class SettingsDialog(QDialog):
         f.addRow(check("ctrl_wheel_icon_size", "Ctrl+mouse wheel changes the icon size"))
         f.addRow(check("drive_usage_bars", "This PC shows how full each drive is"))
         f.addRow(check("bulk_rename_f2", "F2 with several items selected opens Bulk rename"))
+        f.addRow(check("context_archive", "Extract and Add to archive in the right-click menu",
+                       "Uses NanaZip or 7-Zip, else WinRAR, else Windows' built-in tar."))
         bar = QGroupBox("Status bar")
         fb = QFormLayout(bar)
         fb.addRow(check("status_sort_toggle", "Sort switch (folders first / mixed)"))

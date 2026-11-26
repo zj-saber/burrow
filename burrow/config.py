@@ -126,6 +126,7 @@ DEFAULTS = {
     "sync_excludes": "Thumbs.db; desktop.ini; ~$*; *.tmp",
     "rename_recent": {},            # Bulk rename: last used fields
     "bulk_rename_f2": True,         # F2 with several items selected opens Bulk rename
+    "context_archive": True,        # right-click: Extract here / Extract to folder / Add to archive
     "confirm_delete_permanent": True,
     "arrow_sidebar_nav": True,      # ← from the list goes to the sidebar, → comes back
     "shortcut_scheme": "explorer",  # "explorer" (Windows Explorer keys) or "classic" (Burrow 0.11)
