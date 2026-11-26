@@ -1,6 +1,6 @@
 """The command bar above the address bar (Explorer-style).
 
-New ▾ | Cut  Copy  Paste  Rename  Extract  Delete | Sort ▾  View ▾  Filter | Compare
+New ▾ | Cut  Copy  Paste  Rename  Extract  Delete | Sort ▾  View ▾ | Compare
 Duplicates  Bulk rename  Auto folder.  Every button runs one of the window's existing
 actions, so it does exactly what the menu item or shortcut does; the bar only adds the
 buttons and keeps them enabled when they apply. The chevron at the end of the address bar
@@ -45,7 +45,6 @@ class CommandBar(QWidget):
         self.view_menu = QMenu(self)
         self.view_menu.aboutToShow.connect(self._fill_view_menu)
         self.view_btn = self._button("view", "View", menu=self.view_menu)
-        self.filter_btn = self._button("filter", "Filter", action=win.act_filter)
         self._sep()
         self.compare_btn = self._button("compare", action=win.act_compare)
         self.dupes_btn = self._button("duplicates", action=win.act_dupes)

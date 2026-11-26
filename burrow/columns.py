@@ -328,6 +328,10 @@ class ColumnsView(QColumnView):
         """Each column is a _Column wired to the window's menu, actions and icon size."""
         col = _Column(self, self.viewport())    # our own list: smooth scrolling and arrow keys
         self.initializeColumn(col)
+        # one selection for every column (Qt leaves new columns with one of their own, so ↑/↓
+        # moved a highlight the view never saw and the arrows seemed dead)
+        if self.selectionModel() is not None:
+            col.setSelectionModel(self.selectionModel())
         col.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         col.verticalScrollBar().setSingleStep(max(16, self._delegate.height) if hasattr(self, "_delegate") else 24)
         col.setRootIndex(index)
@@ -535,9 +539,34 @@ class ColumnsView(QColumnView):
     def column_for(self, parent: QModelIndex):
         """The column listing parent's contents, if it's open."""
         for c in self.findChildren(_Column):
-            if c.rootIndex() == parent and c.isVisible():
-                return c
+            if c.rootIndex() == parent and not c.isHidden():   # (isVisible is False while the
+                return c                                       # view itself is still hidden)
         return None
+
+    def current_column(self):
+        """The column holding the current item, else the first one (the drives)."""
+        cur = self.currentIndex()
+        col = self.column_for(cur.parent()) if cur.isValid() else None
+        if col is None:
+            col = self.column_for(self.rootIndex())
+        return col
+
+    # The keyboard always belongs to a column: Qt's own columns view only knows ← / →, so if
+    # it ever gets the focus (focus_list, a click between columns, back at the drives), it hands
+    # it straight to the column you're in, and passes on any key that reached it meanwhile.
+    def focusInEvent(self, ev):
+        super().focusInEvent(ev)
+        col = self.current_column()
+        if col is not None:
+            col.setFocus()
+
+    def keyPressEvent(self, ev):
+        col = self.current_column()
+        if col is not None:
+            col.setFocus()
+            col.keyPressEvent(ev)
+            return
+        super().keyPressEvent(ev)
 
     def _go_to(self, idx: QModelIndex):
         self.setCurrentIndex(idx)

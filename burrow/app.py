@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QCompleter, QDockWidget,
 from PySide6.QtCore import QItemSelection, QItemSelectionModel
 
 from . import dialogs, fileops, foldercolor, integration, tags, theme
-from .chrome import AddressArea, UsagePill
+from .chrome import AddressArea, ProgressPill, UsagePill
 from .toolbar import CommandBar
 from PySide6.QtCore import QPoint, QRect
 from PySide6.QtGui import QColor
@@ -74,6 +74,11 @@ class JobRunner(QObject):
         self.job.cancel()
         self.thread.quit()
         self.thread.wait(5000)
+
+    @Slot(object, object, str)
+    def report(self, done, total, _name):
+        """The status-bar pill (see MainWindow.task_update)."""
+        self.window.task_update(getattr(self, "task", -1), done, total)
 
     @Slot(object, object, str)
     def on_progress(self, done, total, name):
@@ -693,23 +698,21 @@ class MainWindow(QMainWindow):
         self.update_btn.hide()
         self.update_btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.update_btn.customContextMenuRequested.connect(self._update_btn_menu)
-        from PySide6.QtWidgets import QCheckBox
-        self.auto_update_chk = QCheckBox("Auto update")
-        self.auto_update_chk.setObjectName("statusCheck")
+        self.auto_update_chk = QToolButton()          # an icon: lit when Burrow checks on start
+        self.auto_update_chk.setObjectName("statusIcon")
+        self.auto_update_chk.setCheckable(True)
+        self.auto_update_chk.setAutoRaise(True)
         self.auto_update_chk.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.auto_update_chk.setToolTip("Check GitHub for a new Burrow every time it starts")
+        self.auto_update_chk.setCursor(Qt.CursorShape.PointingHandCursor)
         self.auto_update_chk.setChecked(bool(self.config.get("check_updates")))
         self.auto_update_chk.toggled.connect(self._auto_update_toggled)
+        self.auto_update_chk.toggled.connect(lambda _on: self._sync_auto_update_icon())
+        self._sync_auto_update_icon()
+        self.progress_pill = ProgressPill()            # copying / extracting, next to the counts
+        self._tasks: dict = {}
+        self._task_ids = iter(range(1, 1 << 30))
         self.usage_pill = UsagePill()
         self.usage_pill.hide()
-        self.folder_btn = QToolButton()                # Tools ▸ Folders for loose files
-        self.folder_btn.setObjectName("statusToggle")
-        self.folder_btn.setText("Auto folder")
-        self.folder_btn.setToolTip("Put each loose file in a folder named after it; files with the "
-                                   "same name share one (Ctrl+Alt+F)")
-        self.folder_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.folder_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.folder_btn.clicked.connect(self.folderize)
 
         # One row: counts on the left, the switches centred, slider / storage / update on the
         # right. It's a single permanent widget, so status messages are shown in the left
@@ -719,11 +722,16 @@ class MainWindow(QMainWindow):
         g = QGridLayout(row)
         g.setContentsMargins(4, 0, 4, 0)
         g.setHorizontalSpacing(6)
-        self.status_left.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        g.addWidget(self.status_left, 0, 0)
+        self.status_left.setMaximumWidth(520)
+        left = QHBoxLayout()
+        left.setSpacing(8)
+        left.addWidget(self.status_left)
+        left.addWidget(self.progress_pill)
+        left.addStretch(1)
+        g.addLayout(left, 0, 0)
         mid = QHBoxLayout()
         mid.setSpacing(6)
-        for wdg in (self.sort_mode_btn, self.view_mode_btn, self.folder_btn):
+        for wdg in (self.sort_mode_btn, self.view_mode_btn):
             mid.addWidget(wdg)
         g.addLayout(mid, 0, 1)
         right = QHBoxLayout()
@@ -889,6 +897,7 @@ class MainWindow(QMainWindow):
         self.command_bar.apply_theme()
         self._sync_bar_toggle()
         self.statusBar().setStyleSheet(theme.statusbar_qss(c))
+        self._sync_auto_update_icon()
         self.inspector.setStyleSheet(theme.inspector_qss(c))
         self.inspector.media.apply_theme()
         self.sidebar.apply_theme(c)
@@ -1559,7 +1568,6 @@ class MainWindow(QMainWindow):
         """Settings switches for the status bar, sidebar dragging, preview handle and keys."""
         c = self.config
         self.view_mode_btn.setVisible(bool(c.get("status_view_toggle")))
-        self.folder_btn.setVisible(bool(c.get("status_folder_button")))
         self.auto_update_chk.setVisible(bool(c.get("status_auto_update")))
         if self.auto_update_chk.isChecked() != bool(c.get("check_updates")):
             self.auto_update_chk.blockSignals(True)
@@ -1781,8 +1789,10 @@ class MainWindow(QMainWindow):
     def _archive_job(self, fn):
         """tar.exe runs without a window: do it in the background, then refresh."""
         self.statusBar().showMessage("Working on the archive…")
+        tid = self.task_begin("Working on the archive")
 
         def done(res):
+            self.task_end(tid)
             self.statusBar().clearMessage()
             errors = [str(res)] if isinstance(res, Exception) else res
             if errors:
@@ -1819,13 +1829,15 @@ class MainWindow(QMainWindow):
 
     def run_extract(self, paths, to_folder):
         from . import extract
-        err = extract.extract(paths, to_folder, self._archive_job)
+        err = extract.extract(paths, to_folder, self._archive_job,
+                              watch=lambda p: self._watch_process(p, f"Extracting {len(paths)} archive(s)"))
         if err:
             QMessageBox.warning(self, APP_NAME, err)
 
     def run_compress(self, paths):
         from . import extract
-        err = extract.compress(paths, self._archive_job)
+        err = extract.compress(paths, self._archive_job,
+                               watch=lambda p: self._watch_process(p, "Adding to archive"))
         if err:
             QMessageBox.warning(self, APP_NAME, err)
 
@@ -1934,6 +1946,8 @@ class MainWindow(QMainWindow):
         from . import marks
         marks.add_pasting([d for _s, d, _m in plan])      # green while they're being written
         runner.finished.connect(self._job_finished)
+        runner.task = self.task_begin(f"{'Moving' if move else 'Copying'} {len(plan)} item(s)")
+        runner.job.progress.connect(runner.report)
         self.jobs.append(runner)
         runner.start()
         return True
@@ -1985,9 +1999,55 @@ class MainWindow(QMainWindow):
                 return None
         return plan
 
+    # ----- the progress pill: one for everything Burrow is copying, moving or unpacking ------------
+    def task_begin(self, label: str) -> int:
+        tid = next(self._task_ids)
+        self._tasks[tid] = [label, 0, None]
+        self._sync_progress()
+        return tid
+
+    def task_update(self, tid: int, done, total):
+        if tid in self._tasks:
+            self._tasks[tid][1:] = [done, total]
+            self._sync_progress()
+
+    def task_end(self, tid: int):
+        self._tasks.pop(tid, None)
+        self._sync_progress()
+
+    def _sync_progress(self):
+        """Filled to the share done (all jobs together), or gliding when an archiver in its
+        own window gives no figures."""
+        if not self._tasks:
+            self.progress_pill.stop()
+            return
+        known = [t for t in self._tasks.values() if t[2]]
+        value = None
+        if len(known) == len(self._tasks):
+            value = sum(t[1] for t in known) / max(1, sum(t[2] for t in known))
+        tip = "\n".join(t[0] + (f" — {int(t[1] * 100 / t[2])}%" if t[2] else "") for t in self._tasks.values())
+        self.progress_pill.set_progress(value, tip)
+
+    def _watch_process(self, proc, label: str):
+        """NanaZip / 7-Zip / WinRAR work in their own window: show the pill until they exit,
+        then refresh."""
+        tid = self.task_begin(label)
+        timer = QTimer(self)
+        timer.setInterval(400)
+
+        def check():
+            if proc.poll() is not None:
+                timer.stop()
+                timer.deleteLater()
+                self.task_end(tid)
+                self.refresh_view()
+        timer.timeout.connect(check)
+        timer.start()
+
     def _job_finished(self, runner):
         """A copy/move finished: tags follow the items, the list refreshes."""
         from . import marks
+        self.task_end(getattr(runner, "task", -1))
         marks.remove_pasting([d for _s, d, _m in runner.job.plan])
         for src, dst, _mode in runner.job.plan:      # tags follow items Burrow moved or copied
             if os.path.lexists(dst):
@@ -2276,6 +2336,18 @@ class MainWindow(QMainWindow):
     def _hide_update_btn(self):
         self.config.set("status_update_button", False)       # back on in Settings ▸ Sidebar & list
         self.statusBar().showMessage("Update button hidden. Settings ▸ Sidebar & list brings it back.", 6000)
+
+    def _sync_auto_update_icon(self):
+        on = self.auto_update_chk.isChecked()
+        ic = theme.icon("auto_update", 16)
+        if not on:                                     # off: the same icon, faded
+            from PySide6.QtGui import QIcon
+            ic = QIcon(ic.pixmap(16, 16, QIcon.Mode.Disabled))
+        self.auto_update_chk.setIcon(ic)
+        self.auto_update_chk.setToolTip("Auto update is on: Burrow checks GitHub for a new version every time it "
+                                        "starts. Click to turn off." if on else
+                                        "Auto update is off. Click to have Burrow check GitHub for a new version "
+                                        "every time it starts.")
 
     def _auto_update_toggled(self, on: bool):
         self.config.set("check_updates", on)

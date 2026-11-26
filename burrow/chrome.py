@@ -346,6 +346,64 @@ class AddressArea(QStackedWidget):
             self.setCurrentWidget(self.crumbs)
 
 
+class ProgressPill(QWidget):
+    """Status bar, next to the item count: a skinny pill while Burrow copies, moves, extracts or
+    zips. Filled to the share done when that's known; a gliding segment when it isn't (an
+    archiver working in its own window). Hidden the rest of the time."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        from PySide6.QtCore import QTimer
+        self.value = None              # 0..1, or None = working, amount unknown
+        self._phase = 0.0
+        self._tick = QTimer(self)
+        self._tick.setInterval(33)
+        self._tick.timeout.connect(self._step)
+        self.setFixedSize(90, 14)
+        self.hide()
+
+    def set_progress(self, value, tip: str = ""):
+        """value: 0..1, or None for unknown. Call stop() when everything is done."""
+        self.value = value
+        self.setToolTip(tip)
+        self.show()
+        if value is None:
+            if not self._tick.isActive():
+                self._tick.start()
+        else:
+            self._tick.stop()
+        self.update()
+
+    def stop(self):
+        self._tick.stop()
+        self.hide()
+
+    def _step(self):
+        self._phase = (self._phase + 0.025) % 1.0
+        self.update()
+
+    def paintEvent(self, _ev):
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QPainter
+        from . import theme
+        p = QPainter(self)
+        h = 4
+        r = QRectF(2, (self.height() - h) / 2, self.width() - 4, h)
+        if self.value is not None:
+            theme.paint_usage(p, r, self.value, full_warning=False)
+        else:                                       # unknown amount: a segment gliding along
+            theme.paint_usage(p, r, 0.0)
+            c = theme.colors()
+            seg = r.width() * 0.3
+            x = r.left() - seg + (r.width() + seg) * self._phase
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(c["accent"]))
+            p.setClipRect(r)
+            p.drawRoundedRect(QRectF(x, r.top(), seg, h), h / 2, h / 2)
+        p.end()
+
+
 class UsagePill(QWidget):
     """Status bar: how full the current drive is, as a skinny pill."""
 

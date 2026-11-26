@@ -119,8 +119,7 @@ DEFAULTS = {
     "status_sort_toggle": True,     # status bar: Sort folders-first / mixed
     "status_view_toggle": True,     # status bar: View list / columns
     "status_icon_slider": True,     # status bar: icon size slider
-    "status_folder_button": True,   # status bar: Auto folder (folders for loose files)
-    "status_auto_update": True,     # status bar: the Auto update check mark
+    "status_auto_update": True,     # status bar: the Auto update icon
     "status_update_button": True,   # status bar: Update button when a new version is out
     "status_storage_bar": True,     # status bar: how full the drive is, as a skinny pill
     "drive_usage_bars": True,       # This PC: the same pill beside each drive

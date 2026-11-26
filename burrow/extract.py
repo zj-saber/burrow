@@ -73,11 +73,13 @@ def folder_name(archive: str) -> str:
     return base or name
 
 
-def _start(cmd, cwd):
-    subprocess.Popen(cmd, cwd=cwd, close_fds=True, stdin=subprocess.DEVNULL)
+def _start(cmd, cwd, watch=None):
+    proc = subprocess.Popen(cmd, cwd=cwd, close_fds=True, stdin=subprocess.DEVNULL)
+    if watch is not None:
+        watch(proc)                          # the window shows progress until it exits
 
 
-def extract(archives: list[str], to_folder: bool, run_hidden) -> str | None:
+def extract(archives: list[str], to_folder: bool, run_hidden, watch=None) -> str | None:
     """Start extracting. to_folder: each archive into a folder named after it. run_hidden(fn)
     runs a blocking job off the GUI thread (for tar). Returns an error message or None."""
     t = tool()
@@ -89,11 +91,11 @@ def extract(archives: list[str], to_folder: bool, run_hidden) -> str | None:
         out = os.path.join(parent, "*") if to_folder else parent       # 7-Zip: * = the archive's name
         # -an -ai!: several archives in one go (a 2nd plain name would be read as a filter);
         # -snz: extracted files inherit the archive's "downloaded from the internet" mark, like Explorer
-        _start([exe, "x", "-an", *[f"-ai!{os.path.basename(x)}" for x in archives], "-snz", f"-o{out}"], parent)
+        _start([exe, "x", "-an", *[f"-ai!{os.path.basename(x)}" for x in archives], "-snz", f"-o{out}"], parent, watch)
     elif kind == "winrar":
         for a in archives:
             dest = os.path.join(parent, folder_name(a)) if to_folder else parent
-            _start([exe, "x", a, dest + os.sep], parent)
+            _start([exe, "x", a, dest + os.sep], parent, watch)
     else:
         def job():
             errors = []
@@ -140,7 +142,7 @@ def archive_name(paths: list[str]) -> str:
     return os.path.basename(os.path.dirname(paths[0])) or "Archive"
 
 
-def compress(paths: list[str], run_hidden) -> str | None:
+def compress(paths: list[str], run_hidden, watch=None) -> str | None:
     """Add to archive. 7-Zip/NanaZip open their Add dialog (format, level, password) with a
     .zip name filled in; WinRAR and tar make the .zip directly."""
     t = tool()
@@ -152,9 +154,9 @@ def compress(paths: list[str], run_hidden) -> str | None:
     target = free_name(parent, archive_name(paths) + ".zip", False)
     names = [os.path.basename(p) for p in paths]
     if kind == "7z":
-        _start([exe, "a", "-ad", "-tzip", target, "--", *names], parent)
+        _start([exe, "a", "-ad", "-tzip", target, "--", *names], parent, watch)
     elif kind == "winrar":
-        _start([exe, "a", "-afzip", "-ep1", target, "--", *paths], parent)
+        _start([exe, "a", "-afzip", "-ep1", target, "--", *paths], parent, watch)
     else:
         def job():
             r = subprocess.run([exe, "-a", "-cf", target, *names], cwd=parent, capture_output=True, text=True,

@@ -195,7 +195,7 @@ GLYPHS = {
     "new": "", "new_folder": "", "new_file": "", "cut": "", "copy": "",
     "paste": "", "rename": "", "extract": "", "delete": "", "sort": "",
     "view": "", "filter": "", "compare": "", "duplicates": "",
-    "bulk_rename": "", "auto_folder": "",
+    "bulk_rename": "", "auto_folder": "", "auto_update": "",
 }
 _icon_font_family: str | None = None
 _icon_cache: dict = {}
@@ -329,6 +329,9 @@ QStatusBar QToolButton#statusToggle:hover {{ color: {c['text']}; border-color: {
 QStatusBar QToolButton#statusToggle:checked {{ color: {c['accent']}; }}
 QStatusBar QSlider#iconSlider {{ margin: 0 2px; }}
 QStatusBar QCheckBox#statusCheck {{ color: {c['dim']}; padding: 0 6px; spacing: 5px; }}
+QStatusBar QToolButton#statusIcon {{ background: transparent; border: none; border-radius: 6px; padding: 3px; }}
+QStatusBar QToolButton#statusIcon:hover {{ background: {c['chip']}; }}
+QStatusBar QToolButton#statusIcon:checked {{ background: {c['chip']}; }}
 QStatusBar QCheckBox#statusCheck:hover {{ color: {c['text']}; }}
 QSlider#iconSlider::groove:horizontal {{ height: 3px; background: {c['border']}; border-radius: 1px; }}
 QSlider#iconSlider::sub-page:horizontal {{ background: {c['accent']}; border-radius: 1px; }}
@@ -379,7 +382,7 @@ def paint_hover(p: QPainter, rect, color: QColor):
 FULL_AT = 0.9                      # turns red past this, like Explorer
 
 
-def paint_usage(p: QPainter, r: QRectF, used: float):
+def paint_usage(p: QPainter, r: QRectF, used: float, full_warning: bool = True):
     """A thin rounded track with the used share filled in the accent (red when nearly full)."""
     c = _current
     p.save()
@@ -392,6 +395,6 @@ def paint_usage(p: QPainter, r: QRectF, used: float):
     p.drawRoundedRect(r, rad, rad)
     used = min(max(used, 0.0), 1.0)
     if used > 0:
-        p.setBrush(QColor("#e5484d" if used >= FULL_AT else c["accent"]))
+        p.setBrush(QColor("#e5484d" if full_warning and used >= FULL_AT else c["accent"]))
         p.drawRoundedRect(QRectF(r.left(), r.top(), max(r.height(), r.width() * used), r.height()), rad, rad)
     p.restore()
