@@ -6,7 +6,7 @@ import re
 
 from PySide6.QtCore import QFileSystemWatcher, QItemSelection, QItemSelectionModel, QPointF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPalette
-from PySide6.QtWidgets import (QAbstractItemView, QFrame, QHeaderView, QLabel, QLineEdit, QMenu,
+from PySide6.QtWidgets import (QAbstractItemView, QFrame, QHeaderView, QLabel, QLineEdit, QListView, QMenu,
                                QStyle, QStyledItemDelegate, QTreeView, QVBoxLayout, QWidget)
 
 from . import dialogs, everything, fileops, marks, places, tags, theme
@@ -319,8 +319,11 @@ class FolderView(QWidget):
         self.sidebar_handler = None        # set by the window: ← moves focus to the sidebar
         self.icon_wheel_handler = None     # set by the window: Ctrl+wheel changes icon size
         self.loading = False
-        self.mode = config.get("view_mode") if config.get("view_mode") in ("list", "columns") else "list"
+        self.mode = config.get("view_mode") if config.get("view_mode") in ("list", "columns", "thumbs", "river") else "list"
         self.columns = None                # built the first time this tab shows columns
+        self.thumbs = None                 # Thumbnails view, built on first use
+        self.river = None                  # River view (photos in flowing rows), built on first use
+        self.results = None                # columns view: the search results column
         self._from_columns = False
         self._searched = False             # the list shows Everything results, not the folder
         self._search_token = 0
@@ -382,7 +385,7 @@ class FolderView(QWidget):
         self.filter_edit.setPlaceholderText("Search (just start typing) — Esc clears")
         self.filter_edit.setClearButtonEnabled(True)
         self.filter_edit.textChanged.connect(self._filter_changed)
-        self.filter_edit.leave.connect(self.tree.setFocus)
+        self.filter_edit.leave.connect(self.focus_list)
         self.filter_edit.hide()
 
         lay = QVBoxLayout(self)
@@ -416,6 +419,9 @@ class FolderView(QWidget):
         self.tree.hover_color = theme.hover_color(c, int(self.config.get("hover_strength")))
         if self.columns is not None:
             self.columns.set_hover_color(self.tree.hover_color)
+        for v in self.item_views()[1:]:
+            v.hover_color = self.tree.hover_color
+            v.viewport().update()
         self.tree.viewport().update()
         self.set_icon_size(self.config.get("icon_size") or 16)
 
@@ -431,6 +437,12 @@ class FolderView(QWidget):
         self.tree.doItemsLayout()               # uniform row heights: re-measure the first row
         if self.columns is not None:
             self.columns.set_icon_size(px, self.row_height())
+        for v in (self.thumbs, self.river):
+            if v is not None:
+                v.set_size(px)
+        if self.results is not None:
+            self.results.setIconSize(QSize(px, px))
+            self.results.row_h = self.row_height()
 
     # ----- navigation -------------------------------------------------------------
     def navigate(self, path: str, record: bool = True, select: str | None = None) -> bool:
@@ -538,7 +550,33 @@ class FolderView(QWidget):
 
     # ----- columns view (optional, per tab) ------------------------------------------
     def columns_active(self) -> bool:
-        return self.mode == "columns" and self.columns is not None and self.columns.isVisible()
+        """Columns on screen and in charge (not while its search results are showing)."""
+        return self.mode == "columns" and self.columns is not None and self.columns.isVisible() \
+            and not self.results_on()
+
+    def results_on(self) -> bool:
+        return self.results is not None and self.results.isVisible()
+
+    def item_view(self):
+        """The view showing this tab's list now: the list, Thumbnails, River or the columns'
+        results column. (Columns themselves have their own model: see columns_active.)"""
+        if self.results_on():
+            return self.results
+        for v in (self.thumbs, self.river):
+            if v is not None and v.isVisible():
+                return v
+        return self.tree
+
+    def item_views(self) -> list:
+        return [v for v in (self.tree, self.thumbs, self.river, self.results) if v is not None]
+
+    def _make_thumb_view(self, river: bool):
+        from .thumbs import ThumbView
+        v = ThumbView(self, river, self)
+        v.hover_color = self.tree.hover_color
+        v.set_size(self.icon_px)
+        self._lay.insertWidget(2, v, 1)
+        return v
 
     def set_mode(self, mode: str):
         if mode == self.mode:
@@ -549,9 +587,17 @@ class FolderView(QWidget):
         self.selectionChanged.emit()
 
     def _sync_mode_widgets(self, select: str | None = None):
-        """Columns can't show virtual places (This PC, Network, tags): those stay a list."""
-        want = self.mode == "columns" and self.path is not None and not places.is_special(self.path) \
-            and not self.filter_text()
+        """Show the tab's view: list, columns, thumbnails or river. Virtual places (This PC,
+        Network, tags) always show as a list."""
+        mode = self.mode if (self.path is not None and not places.is_special(self.path)) else "list"
+        want = mode == "columns"
+        if mode == "thumbs" and self.thumbs is None:
+            self.thumbs = self._make_thumb_view(False)
+        if mode == "river" and self.river is None:
+            self.river = self._make_thumb_view(True)
+        if mode in ("thumbs", "river"):
+            from .thumbs import loader
+            loader().drop_queue()                    # pictures for the folder on screen first
         if want and self.columns is None:
             from .columns import ColumnsView
             c = self.columns = ColumnsView(bool(self.config.get("show_hidden")), self.row_height(), self)
@@ -574,12 +620,56 @@ class FolderView(QWidget):
             c.newTabRequested.connect(self.openInNewTab.emit)
             c.dropRequested.connect(self.tree.dropRequested.emit)
             c.renameFailed.connect(self._rename_failed)
+            c.horizontalScrollBar().valueChanged.connect(
+                lambda *_: QTimer.singleShot(0, self._sync_results_column))   # after the columns moved
             self._lay.insertWidget(2, c, 1)
         if self.columns is not None:
             self.columns.setVisible(want)
-        self.tree.setVisible(not want)
+        for v, m in ((self.thumbs, "thumbs"), (self.river, "river")):
+            if v is not None:
+                v.setVisible(mode == m)
+        self.tree.setVisible(mode == "list")
         if want and not self._from_columns:
             self.columns.show_path(self.path, select)
+        self._sync_results_column()
+
+    def _sync_results_column(self):
+        """Columns view while searching: the results take the searched folder's column and
+        everything to its right; the columns to the left stay."""
+        on = self.columns is not None and self.columns.isVisible() and bool(self.filter_text())
+        if on and self.results is None:
+            from .thumbs import ResultsColumn
+            # a child of the columns view itself, not of its viewport: scrolling the columns
+            # would carry it along with them
+            self.results = ResultsColumn(self, self.columns)
+            self.results.hover_color = self.tree.hover_color
+            self.results.setIconSize(QSize(self.icon_px, self.icon_px))
+            self.results.row_h = self.row_height()
+        if self.results is None:
+            return
+        if not on:
+            self.results.hide()
+            return
+        c = self.columns
+        vp = c.viewport()
+        # the searched folder's own column (Qt may have it hidden for a moment), else the
+        # slot right after the column you're in
+        root = c.fs.index(self.path)
+        col = next((k for k in c.findChildren(QListView) if k.parent() is vp and k.rootIndex() == root), None)
+        if col is not None:
+            x = col.x()
+        else:
+            cur = c.column_for(c.currentIndex().parent())
+            x = cur.x() + cur.width() if cur is not None else 0
+        x = max(0, min(x, vp.width() - 320))
+        self.results.setGeometry(vp.x() + x, vp.y(), vp.width() - x, vp.height())
+        self.results.show()
+        self.results.raise_()
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        if self.results_on():
+            self._sync_results_column()
 
     def _column_folder(self, path: str):
         self._from_columns = True
@@ -601,20 +691,21 @@ class FolderView(QWidget):
         self.selectionChanged.emit()
 
     def focus_list(self):
-        (self.columns if self.columns_active() else self.tree).setFocus()
+        (self.columns if self.columns_active() else self.item_view()).setFocus()
 
     def select_all(self):
         if self.columns_active():
             self.columns.select_all_in_column()
         else:
-            self.tree.selectAll()
+            self.tree.selectAll()               # one selection shared by every view
 
     def menu_pos(self, pos):
         """Global position for a context menu requested at `pos`, and whether it's on an item."""
         if self.columns_active():
             from PySide6.QtGui import QCursor
             return QCursor.pos(), bool(self.columns.selected_paths())
-        return self.tree.viewport().mapToGlobal(pos), self.tree.indexAt(pos).isValid()
+        v = self.item_view()
+        return v.viewport().mapToGlobal(pos), v.indexAt(pos).isValid()
 
     def _watch(self):
         """Watch the folder for changes. Called after a successful load: adding a watch on an
@@ -814,6 +905,8 @@ class FolderView(QWidget):
         if cur_idx is not None:
             sm.setCurrentIndex(cur_idx, QItemSelectionModel.SelectionFlag.NoUpdate)
             self.tree.scrollTo(cur_idx)
+            if self.item_view() is not self.tree:
+                self.item_view().scrollTo(cur_idx)
         elif self.proxy.rowCount():
             sm.setCurrentIndex(self.proxy.index(0, 0), QItemSelectionModel.SelectionFlag.NoUpdate)
 
@@ -824,7 +917,7 @@ class FolderView(QWidget):
             return
         idx = self.tree.currentIndex()
         if idx.isValid():
-            self.tree.edit(idx.siblingAtColumn(0))
+            self.item_view().edit(idx.siblingAtColumn(0))
 
     def _rename_failed(self, msg):
         from PySide6.QtWidgets import QMessageBox
@@ -875,7 +968,8 @@ class FolderView(QWidget):
         if not self.search_on():
             return False
         self.type_into_filter(text)
-        self.tree.setFocus()
+        if self.results is not None:
+            self.results.setFocus()
         return True
 
     def _run_search(self):
@@ -919,8 +1013,8 @@ class FolderView(QWidget):
 
     def _filter_changed(self, text):
         if self.columns is not None and self.mode == "columns":
-            had_focus = self.tree.hasFocus()
-            self._sync_mode_widgets()          # searching shows a list; done, the columns again
+            had_focus = self.results is not None and self.results.hasFocus()
+            self._sync_results_column()        # results column on while searching, off after
             if not text and had_focus:
                 self.focus_list()
         if text and self.search_on():
@@ -1000,6 +1094,9 @@ class FolderView(QWidget):
             self.tree.viewport().update()
             if self.columns is not None:
                 self.columns.set_hover_color(hover)
+            for v in self.item_views()[1:]:
+                v.hover_color = hover
+                v.viewport().update()
         if self.columns is not None:
             sizes = (bool(self.config.get("columns_sizes")), bool(self.config.get("everything_sizes")))
             if sizes != (self.columns.show_sizes, self.columns.folder_sizes_on):

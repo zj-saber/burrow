@@ -134,12 +134,12 @@ class CommandBar(QWidget):
         m, w = self.view_menu, self.win
         m.clear()
         v = w.view()
-        cols = v is not None and v.mode == "columns"
         group = QActionGroup(m)
-        for mode, title in (("list", "List"), ("columns", "Columns")):
+        cur = v.mode if v is not None else "list"
+        for mode, title in w.VIEW_MODES:
             a = m.addAction(title)
             a.setCheckable(True)
-            a.setChecked(cols == (mode == "columns"))
+            a.setChecked(mode == cur)
             group.addAction(a)
             a.triggered.connect(lambda _=False, md=mode: w.set_view_mode(md))
         m.addSeparator()

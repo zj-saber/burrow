@@ -96,11 +96,10 @@ class TabHost(QObject):
         return btn
 
     def _sync_close_buttons(self):
-        many = len(self._w) > 1
-        for i in range(self.bar.count()):
+        for i in range(self.bar.count()):          # every tab has its x, even a lone one
             btn = self.bar.tabButton(i, QTabBar.ButtonPosition.RightSide)
             if btn is not None:
-                btn.setVisible(many)
+                btn.setVisible(True)
 
     def set_close_icon(self, icon):
         self.close_icon = icon

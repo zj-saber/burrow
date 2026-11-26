@@ -260,7 +260,7 @@ class SettingsDialog(QDialog):
         f.addRow(check("show_folder_icons", "Show Explorer folder colors and custom folder icons"))
         f.addRow(check("show_tags", "Color tags (dots, Tags menu and sidebar section)"))
         self.view_mode = QComboBox()
-        for label, data in [("List", "list"), ("Columns", "columns")]:
+        for label, data in [("List", "list"), ("Columns", "columns"), ("Thumbnails", "thumbs"), ("River (photos)", "river")]:
             self.view_mode.addItem(label, data)
         self.view_mode.setCurrentIndex(max(self.view_mode.findData(config.get("view_mode")), 0))
         f.addRow("New tabs open as:", self.view_mode)

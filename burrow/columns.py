@@ -482,6 +482,56 @@ class ColumnsView(QColumnView):
             self.fileChosen.emit(p)
 
     # ----- keyboard -----------------------------------------------------------------------
+    THIRD = 2                         # the column you're in sits at most this many columns in
+
+    def scrollTo(self, index, hint=QAbstractItemView.ScrollHint.EnsureVisible):
+        """Instead of Qt's (which keeps the newest column at the right edge): keep the column
+        you're in at the third place from the left, older columns sliding off to the left, so
+        the folder you're in and what's in it have the room on the right."""
+        if not index.isValid():
+            return
+        col = self.column_for(index.parent())
+        if col is None:
+            QTimer.singleShot(0, lambda: self._align(index))    # its column is still being made
+            return
+        col.scrollTo(index)
+        self._align(index)
+
+    def _align(self, index):
+        col = self.column_for(index.parent()) if index.isValid() else None
+        if col is None:
+            return
+        hb = self.horizontalScrollBar()
+        w = col.width() or 230
+        target = max(0, col.x() + hb.value() - self.THIRD * w)
+        self._want_x = target
+        if target > hb.maximum():                # past the last column: room to slide left
+            hb.setMaximum(target)
+        if not hasattr(self, "_hanim"):
+            hb.rangeChanged.connect(self._keep_range)
+            self._hanim = QPropertyAnimation(hb, b"value", self)
+            self._hanim.setDuration(140)
+            self._hanim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        if self._hanim.state() == QPropertyAnimation.State.Running:
+            if self._hanim.endValue() == target:
+                return
+            self._hanim.stop()
+        if hb.value() != target:
+            self._hanim.setStartValue(hb.value())
+            self._hanim.setEndValue(target)
+            self._hanim.start()
+
+    def _keep_range(self, _lo, hi):
+        """Qt recomputes the scroll range from the columns' total width; keep the extra room
+        that holds the current column in third place."""
+        want = getattr(self, "_want_x", 0)
+        if want > hi:
+            self.horizontalScrollBar().setMaximum(want)
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        QTimer.singleShot(0, lambda: self._align(self.currentIndex()))
+
     def column_for(self, parent: QModelIndex):
         """The column listing parent's contents, if it's open."""
         for c in self.findChildren(_Column):

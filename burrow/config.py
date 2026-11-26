@@ -115,7 +115,7 @@ DEFAULTS = {
     "ctrl_wheel_icon_size": True,   # Ctrl+wheel over the list changes the icon size (like Explorer)
     "hover_strength": 45,           # hover highlight: 0 off ... 100 strong (Settings ▸ General)
     "columns_sizes": True,          # columns view: small sizes after names (folders via Everything)
-    "view_mode": "list",            # new tabs open as "list" or "columns"
+    "view_mode": "list",            # new tabs open as "list", "columns", "thumbs" or "river"
     "status_sort_toggle": True,     # status bar: Sort folders-first / mixed
     "status_view_toggle": True,     # status bar: View list / columns
     "status_icon_slider": True,     # status bar: icon size slider

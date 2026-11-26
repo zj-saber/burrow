@@ -279,7 +279,8 @@ def _repaint_lists():
         for p in w.panes:
             v = p.tabs.currentWidget()
             if v is not None:
-                v.tree.viewport().update()
+                for iv in v.item_views():
+                    iv.viewport().update()
                 if v.columns is not None:
                     for c in v.columns.findChildren(QAbstractItemView):
                         c.viewport().update()
@@ -502,6 +503,10 @@ class MainWindow(QMainWindow):
         self.act_cycle_focus = A("Next area", lambda: self.cycle_focus(1))
         self.act_cycle_focus_back = A("Previous area", lambda: self.cycle_focus(-1))
         self.act_list_view = A("List view", lambda: self.set_view_mode("list"), "Ctrl+Shift+6")
+        self.act_thumbs_view = A("Thumbnails", lambda on: self.set_view_mode("thumbs" if on else "list"),
+                                 "Ctrl+Shift+7", checkable=True)
+        self.act_river_view = A("River (photos)", lambda on: self.set_view_mode("river" if on else "list"),
+                                "Ctrl+Shift+8", checkable=True)
         for n, px in ((1, 64), (2, 48), (3, 32), (4, 16)):     # Explorer: extra large ... small icons
             A(f"Icons {px} px", lambda px=px: self.icon_slider.setValue(px), f"Ctrl+Shift+{n}")
         self.apply_shortcuts()
@@ -662,10 +667,9 @@ class MainWindow(QMainWindow):
         self.config.viewChanged.connect(self._view_preset_changed)
         self.view_mode_btn = QToolButton()
         self.view_mode_btn.setObjectName("statusToggle")
-        self.view_mode_btn.setCheckable(True)
         self.view_mode_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.view_mode_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.view_mode_btn.toggled.connect(lambda on: self.set_view_mode("columns" if on else "list"))
+        self.view_mode_btn.clicked.connect(self._view_mode_menu)
         # icon size slider (16-64 px), live for every tab in every window
         from PySide6.QtWidgets import QSlider
         self.icon_small = QLabel("□")
@@ -750,8 +754,9 @@ class MainWindow(QMainWindow):
             e.addSeparator() if a is None else e.addAction(a)
         v = mb.addMenu("&View")
         v.aboutToShow.connect(lambda: (self.act_folders_first.setChecked(self.view().model.folders_first),
-                                       self.act_columns_view.setChecked(self.view().mode == "columns")))
-        for a in (self.act_inspector, self.act_sidebar, None, self.act_columns_view, self.act_hidden,
+                                       self._sync_view_actions()))
+        for a in (self.act_inspector, self.act_sidebar, None, self.act_columns_view, self.act_thumbs_view,
+                  self.act_river_view, None, self.act_hidden,
                   self.act_folders_first):
             v.addSeparator() if a is None else v.addAction(a)
         self.columns_menu = v.addMenu("Columns")
@@ -1306,6 +1311,8 @@ class MainWindow(QMainWindow):
                 pane.tabs.removeTab(index)
                 v.deleteLater()
                 self._remove_pane(pane)
+            else:                            # the window's only tab: close the window, like Explorer
+                self.close()
             return
         v = pane.tabs.widget(index)
         self.closed_tabs.append(v.path)
@@ -1427,13 +1434,9 @@ class MainWindow(QMainWindow):
         self.sort_mode_btn.setChecked(mixed)
         self.sort_mode_btn.blockSignals(False)
         self.sort_mode_btn.setText("Sort: mixed" if mixed else "Sort: folders first")
-        cols = v.mode == "columns"
         self.sort_mode_btn.setVisible(bool(self.config.get("status_sort_toggle")) and not v.columns_active())
-        self.view_mode_btn.blockSignals(True)
-        self.view_mode_btn.setChecked(cols)
-        self.view_mode_btn.blockSignals(False)
-        self.view_mode_btn.setText("View: columns" if cols else "View: list")
-        self.view_mode_btn.setToolTip("Switch this tab between the list and columns (Ctrl+Shift+L)")
+        self.view_mode_btn.setText("View: " + dict(self.VIEW_MODES)[v.mode].split(" ")[0].lower())
+        self.view_mode_btn.setToolTip("List, columns, thumbnails or river (photos) for this tab")
         self.sort_mode_btn.setToolTip("Files, folders and archives sorted together by the column — click for folders first"
                                       if mixed else "Folders on top, then files — click to sort everything by the column only")
 
@@ -1447,8 +1450,28 @@ class MainWindow(QMainWindow):
                 win.icon_slider.setValue(px)
                 win.icon_slider.blockSignals(False)
 
+    VIEW_MODES = (("list", "List"), ("columns", "Columns"), ("thumbs", "Thumbnails"), ("river", "River (photos)"))
+
+    def _sync_view_actions(self):
+        mode = self.view().mode
+        for a, m in ((self.act_columns_view, "columns"), (self.act_thumbs_view, "thumbs"), (self.act_river_view, "river")):
+            a.setChecked(mode == m)
+
+    def _view_mode_menu(self):
+        """The status bar's View button: pick one of the four views."""
+        from PySide6.QtGui import QActionGroup
+        m = QMenu(self)
+        group = QActionGroup(m)
+        for mode, title in self.VIEW_MODES:
+            a = m.addAction(title)
+            a.setCheckable(True)
+            a.setChecked(self.view().mode == mode)
+            group.addAction(a)
+            a.triggered.connect(lambda _=False, md=mode: self.set_view_mode(md))
+        m.exec(self.view_mode_btn.mapToGlobal(self.view_mode_btn.rect().topLeft()) - QPoint(0, m.sizeHint().height()))
+
     def set_view_mode(self, mode: str):
-        """List or columns for this tab; new tabs open the same way."""
+        """List, columns, thumbnails or river for this tab; new tabs open the same way."""
         v = self.view()
         if v is not None:
             v.set_mode(mode)
