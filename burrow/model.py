@@ -159,7 +159,16 @@ class IconCache:
             key = ("ext", e.ext)
         ic = self._icons.get(key)
         if ic is None:
-            ic = self.provider.icon(QFileInfo(e.path))
+            if not e.is_drive and places.is_remote(e.path):
+                # A network file: the shell would read it (and wait out a dropped connection
+                # while drawing). Ask about a local name with the same extension instead.
+                ic = self._icons.get(("ext", e.ext))
+                if ic is None:
+                    import tempfile
+                    ic = self.provider.icon(QFileInfo(os.path.join(tempfile.gettempdir(), "burrow-icon." + e.ext)))
+                    self._icons[("ext", e.ext)] = ic
+            else:
+                ic = self.provider.icon(QFileInfo(e.path))
             if ic.isNull():
                 ic = self.drive if e.is_drive else self.file
             self._icons[key] = ic

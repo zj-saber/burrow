@@ -663,8 +663,8 @@ class MainWindow(QMainWindow):
         self.folder_btn = QToolButton()                # Tools ▸ Folders for loose files
         self.folder_btn.setObjectName("statusToggle")
         self.folder_btn.setText("Auto folder")
-        self.folder_btn.setToolTip("Put each loose file in a folder named after it; a movie and its "
-                                   "subtitles share one (Ctrl+Alt+F)")
+        self.folder_btn.setToolTip("Put each loose file in a folder named after it; files with the "
+                                   "same name share one (Ctrl+Alt+F)")
         self.folder_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.folder_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.folder_btn.clicked.connect(self.folderize)
@@ -865,6 +865,13 @@ class MainWindow(QMainWindow):
             a.setChecked(v.is_column_visible(key))
             a.setEnabled(key != "name")
             a.toggled.connect(lambda on, k=key: self.view().set_column_visible(k, on))
+        m.addSeparator()
+        fit = m.addAction("Fit columns to content")
+        fit.setCheckable(True)
+        fit.setChecked(bool(self.config.get("auto_fit_columns")))
+        fit.toggled.connect(lambda on: self.config.set("auto_fit_columns", on))
+        m.addSeparator()
+        v.add_layout_actions(m)
 
     def _fill_presets_menu(self):
         self.presets_menu.clear()

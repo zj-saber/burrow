@@ -367,6 +367,10 @@ class FolderView(QWidget):
         self.watcher.directoryChanged.connect(self._dir_changed)
 
         config.viewChanged.connect(self._on_view_changed)
+        config.folderLayoutChanged.connect(self._on_folder_layout_changed)
+        config.settingsChanged.connect(self._settings_changed)
+        self.own_layout = False          # this folder has a layout of its own
+        self._auto_fit = bool(config.get("auto_fit_columns"))
         self.apply_layout()
         self.apply_theme(theme.colors())
 
@@ -396,16 +400,11 @@ class FolderView(QWidget):
     # ----- navigation -------------------------------------------------------------
     def navigate(self, path: str, record: bool = True, select: str | None = None) -> bool:
         path = normalize_path(path)
-        if places.needs_reconnect(path):
-            # A remembered network drive that isn't connected: reconnect like Explorer does
-            # (Windows asks for credentials if it needs them).
-            self.statusMessage.emit(f"Reconnecting {path[:2]}…")
-            if not places.reconnect(path[:2], int(self.window().winId())):
-                self.statusMessage.emit(f"Couldn't reconnect {path[:2]}")
-                return False
+        reconnect = places.needs_reconnect(path)   # a remembered network drive, not connected now
         if not _exists(path):
             self.statusMessage.emit(f"Folder not found: {path}")
             return False
+        self._flush_layout()                   # a layout change still to save belongs to this folder
         if record and self.path is not None and path != self.path:
             self.back_stack.append(self.path)
             self.fwd_stack.clear()
@@ -417,11 +416,77 @@ class FolderView(QWidget):
         self.proxy.set_filter("")
         if self.watcher.directories():
             self.watcher.removePaths(self.watcher.directories())
-        self._load([select] if select else [], select, clear=True)
+        self._retry_delay = 0
+        if reconnect:
+            self._reconnect_then_load(select)
+        else:
+            self._load([select] if select else [], select, clear=True)
+        self._sync_own_layout()
         self._sync_drive_bars()
         self._sync_mode_widgets(select)
         self.pathChanged.emit(path)
         return True
+
+    # ----- network drives: never freeze, recover by themselves ----------------------------
+    def _reconnect_then_load(self, select):
+        """Reconnect a remembered drive on a worker thread (Windows may ask for a password),
+        then load. Done inline this froze the window for up to a minute on a slow server."""
+        path, token = self.path, self._load_token + 1
+        self._load_token = token
+        self.model.set_entries(path, [])
+        self.loading = True
+        self._set_message(f"Reconnecting {path[:2]}…", error=False)
+        hwnd = int(self.window().winId())
+
+        def done(ok):
+            if token != self._load_token or path != self.path:
+                return
+            if ok is True:
+                self._load([select] if select else [], select, clear=True)
+            else:
+                self._loaded(token, ([], "the server isn't answering"), [], None, None)
+        places.run_async(lambda: places.reconnect(path[:2], hwnd), done)
+
+    def _network_state(self, err):
+        """After a network folder loaded (or failed): retry failures with growing pauses, and
+        keep a working connection from idling out."""
+        if not hasattr(self, "_retry_timer"):
+            self._retry_timer = QTimer(self)
+            self._retry_timer.setSingleShot(True)
+            self._retry_timer.timeout.connect(self._retry_network)
+            self._alive_timer = QTimer(self)
+            self._alive_timer.setInterval(4 * 60 * 1000)   # Windows drops idle connections after 10 min
+            self._alive_timer.timeout.connect(self._keep_alive)
+        remote = places.is_remote(self.path) or places.is_server(self.path)
+        if err and remote:
+            self._alive_timer.stop()
+            self._retry_delay = min(max(self._retry_delay * 2, 2), 30)
+            self._set_message(f"Can't reach {display_path(self.path)}: {err}. "
+                              f"Trying again in {self._retry_delay} s…  (F5 tries now)")
+            self._retry_timer.start(self._retry_delay * 1000)
+            return
+        self._retry_timer.stop()
+        self._retry_delay = 0
+        if remote and self.config.get("network_keepalive"):
+            self._alive_timer.start()
+        else:
+            self._alive_timer.stop()
+
+    def _retry_network(self):
+        if not self.isVisible():
+            self._retry_on_show = True        # a hidden tab tries again when it's shown
+            return
+        self.refresh()
+
+    def _keep_alive(self):
+        """While a network folder is on screen, touch it every few minutes on a worker thread:
+        the connection stays up, so coming back doesn't wait for Windows to reconnect. A failed
+        touch reloads the folder, which starts the retries."""
+        if not self.isVisible() or not places.is_remote(self.path or ""):
+            return
+        path = self.path
+        places.run_async(lambda: os.stat(path), lambda res: self.refresh()
+                         if isinstance(res, Exception) and path == self.path else None)
 
     def set_drive_bars(self, on: bool):
         self.drive_bars = on
@@ -504,8 +569,12 @@ class FolderView(QWidget):
         """Watch the folder for changes. Called after a successful load: adding a watch on an
         unreachable network path blocks for the whole network timeout."""
         p = self.path
-        if places.is_special(p) or places.is_server(p) or p in self.watcher.directories():
+        if places.is_special(p) or places.is_server(p):
             return
+        if p in self.watcher.directories():
+            if not places.is_remote(p):
+                return
+            self.watcher.removePath(p)      # a network watch dies with the connection: renew it
         if self.watcher.directories():
             self.watcher.removePaths(self.watcher.directories())
         self.watcher.addPath(p)
@@ -564,7 +633,9 @@ class FolderView(QWidget):
 
     def _dir_changed(self, _path):
         if not self._refresh_timer.isActive():
-            self._refresh_timer.start()
+            # network folders: at most one quiet reload every 2 s, however chatty the share is
+            remote = places.is_remote(self.path or "")
+            self._refresh_timer.start(2000 if remote else 400)
 
     def _auto_refresh(self):
         if self.tree.is_editing():          # don't kill an inline rename
@@ -591,9 +662,16 @@ class FolderView(QWidget):
         if clear:
             self.model.set_entries(path, [])
         self.loading = True
-        self._set_message("Loading…", error=False)
+        if clear or not self.model.entries:
+            # first visit only, and only if it's slow: a refresh keeps the list on screen
+            # instead of flashing "Loading…" (a busy share reports changes every second)
+            QTimer.singleShot(300, lambda tk=token: self._show_loading(tk))
         places.run_async(lambda: DirModel.fetch(path, hidden),
                          lambda res: self._loaded(token, res, select, current, scroll))
+
+    def _show_loading(self, token):
+        if token == self._load_token and self.loading:
+            self._set_message("Loading…", error=False)
 
     def _set_message(self, text: str, error: bool = True):
         self.error_label.setStyleSheet(
@@ -608,12 +686,14 @@ class FolderView(QWidget):
         entries, err = res if isinstance(res, tuple) else ([], str(res))
         self.model.set_entries(self.path, entries)
         self._set_message(f"Can't open {display_path(self.path)}: {err}" if err else "")
+        self._network_state(err)
         if not err:
             self._watch()
             if places.remember_server(self.path):
                 self.config.set("recent_servers", list(places.RECENT_SERVERS))
             self._request_folder_sizes(token)
         self.loaded.emit()
+        self.fit_columns()
         self.select_paths(select, current)
         if scroll is not None:
             self.tree.verticalScrollBar().setValue(scroll)
@@ -759,15 +839,82 @@ class FolderView(QWidget):
         super().showEvent(ev)
         if self.applied_version != self.config.view_version:
             self.apply_layout()
+        if getattr(self, "_retry_on_show", False):
+            self._retry_on_show = False
+            QTimer.singleShot(0, self.refresh)
 
     def _on_view_changed(self, source):
-        if source is self:
+        if source is self or self.own_layout:
             return
         if self.isVisible():
             self.apply_layout()
 
+    def current_layout(self) -> dict:
+        """This folder's own layout if it has one, else the shared one."""
+        return (self.own_layout and self.config.folder_layout(self.path)) or self.config.view
+
+    def _sync_own_layout(self):
+        own = self.config.folder_layout(self.path) is not None if self.path else False
+        if own or self.own_layout:               # entering or leaving a folder with its own layout
+            self.own_layout = own
+            self.apply_layout()
+
+    def _on_folder_layout_changed(self, key, source):
+        if source is not self and self.path and self.config.folder_key(self.path) == key:
+            self.own_layout = self.config.folder_layout(self.path) is not None
+            self.apply_layout()
+
+    def _flush_layout(self):
+        timer = getattr(self, "_edit_timer", None)
+        if timer is not None and timer.isActive():
+            timer.stop()
+            self._save_layout_now()
+
+    def save_layout_for_all(self):
+        """Header menu: this layout (visible columns only) becomes the one every folder uses."""
+        self._flush_layout()
+        self.config.set_view(self.read_layout(prune=True), source=self)
+        self.applied_version = self.config.view_version
+        self.statusMessage.emit("Column layout saved for all folders")
+
+    def save_layout_for_folder(self):
+        self._flush_layout()
+        self.own_layout = True
+        self.config.set_folder_layout(self.path, self.read_layout(prune=True), source=self)
+        self.statusMessage.emit(f"Column layout saved for {title_for(self.path)}")
+
+    def forget_folder_layout(self):
+        self._flush_layout()
+        self.own_layout = False
+        self.config.set_folder_layout(self.path, None, source=self)
+        self.apply_layout()
+        self.statusMessage.emit(f"{title_for(self.path)} uses the shared layout again")
+
+    # ----- auto-fit: columns as wide as their widest item ---------------------------------
+    def _settings_changed(self):
+        on = bool(self.config.get("auto_fit_columns"))
+        if on != self._auto_fit:
+            self._auto_fit = on
+            self.apply_layout()                  # off: your saved widths come back
+
+    def fit_columns(self):
+        if not self._auto_fit:
+            return
+        h = self.tree.header()
+        self._applying = True                    # fitted widths are never saved
+        try:
+            for key in self.current_layout()["columns"]:
+                i = COLUMNS.index(key)
+                self.tree.resizeColumnToContents(i)
+                if key == "name":
+                    h.resizeSection(i, min(max(h.sectionSize(i), 160), 640))
+                else:
+                    h.resizeSection(i, max(h.sectionSize(i), 48))
+        finally:
+            self._applying = False
+
     def apply_layout(self):
-        lay = self.config.view
+        lay = self.current_layout()
         h = self.tree.header()
         self._applying = True
         try:
@@ -785,17 +932,21 @@ class FolderView(QWidget):
         finally:
             self._applying = False
         self.applied_version = self.config.view_version
+        self.fit_columns()
 
-    def read_layout(self) -> dict:
+    def read_layout(self, prune: bool = False) -> dict:
         h = self.tree.header()
         cols = []
         for v in range(h.count()):
             lg = h.logicalIndex(v)
             if not h.isSectionHidden(lg):
                 cols.append(COLUMNS[lg])
-        widths = dict(self.config.view.get("widths", {}))
+        widths = dict(self.current_layout().get("widths", {}))
         for c in cols:
-            widths[c] = h.sectionSize(COLUMNS.index(c))
+            if not self._auto_fit or c not in widths:    # auto-fit widths aren't yours: keep yours
+                widths[c] = h.sectionSize(COLUMNS.index(c))
+        if prune:
+            widths = {c: w for c, w in widths.items() if c in cols}
         sec = h.sortIndicatorSection()
         return {
             "columns": cols,
@@ -806,7 +957,23 @@ class FolderView(QWidget):
         }
 
     def _layout_edited(self):
+        """Header changed (sort, resize, move, show/hide): save once things have settled. Reading
+        the header inside a sort catches it mid-change (a hidden column looked visible), and a
+        drag-resize sends dozens of these."""
         if self._applying:
+            return
+        if not hasattr(self, "_edit_timer"):
+            self._edit_timer = QTimer(self)
+            self._edit_timer.setSingleShot(True)
+            self._edit_timer.setInterval(0)
+            self._edit_timer.timeout.connect(self._save_layout_now)
+        self._edit_timer.start()
+
+    def _save_layout_now(self):
+        if self._applying:
+            return
+        if self.own_layout:                     # edits in a folder with its own layout stay there
+            self.config.set_folder_layout(self.path, self.read_layout(), source=self)
             return
         self.config.set_view(self.read_layout(), source=self)
         self.applied_version = self.config.view_version
@@ -821,8 +988,10 @@ class FolderView(QWidget):
         i = COLUMNS.index(key)
         h.setSectionHidden(i, not on)
         if on and h.sectionSize(i) < 30:
-            h.resizeSection(i, self.config.view["widths"].get(key, DEFAULT_WIDTHS[key]))
+            h.resizeSection(i, self.current_layout()["widths"].get(key, DEFAULT_WIDTHS[key]))
         self._layout_edited()
+        if on:
+            self.fit_columns()
 
     def set_folders_first(self, on: bool):
         self.model.folders_first = on
@@ -843,7 +1012,22 @@ class FolderView(QWidget):
         ff.setCheckable(True)
         ff.setChecked(self.model.folders_first)
         ff.toggled.connect(self.set_folders_first)
+        fit = m.addAction("Fit columns to content")
+        fit.setCheckable(True)
+        fit.setChecked(self._auto_fit)
+        fit.setToolTip("Each column as wide as its widest item. Turn off to get your widths back.")
+        fit.toggled.connect(lambda on: self.config.set("auto_fit_columns", on))
         m.addSeparator()
+        self.add_layout_actions(m)
         presets = m.addMenu("View presets (all folders)")
         dialogs.add_preset_actions(presets, self.config, self)
         m.exec(self.tree.header().mapToGlobal(pos))
+
+    def add_layout_actions(self, m):
+        m.addAction("Save layout for all folders").triggered.connect(self.save_layout_for_all)
+        special = not self.path or places.is_special(self.path)
+        here = m.addAction("Save layout for this folder")
+        here.setEnabled(not special)
+        here.triggered.connect(self.save_layout_for_folder)
+        if self.own_layout:
+            m.addAction("Use the shared layout here").triggered.connect(self.forget_folder_layout)

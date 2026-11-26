@@ -251,6 +251,10 @@ class SettingsDialog(QDialog):
         f.addRow("New tabs open as:", self.view_mode)
         f.addRow(check("ctrl_wheel_icon_size", "Ctrl+mouse wheel changes the icon size"))
         f.addRow(check("drive_usage_bars", "This PC shows how full each drive is"))
+        f.addRow(check("network_keepalive", "Keep network drives connected while one is open",
+                       "Touches the open network folder every 4 minutes so Windows doesn't drop the "
+                       "connection; a dropped drive is retried automatically either way."))
+        f.addRow(check("auto_fit_columns", "Fit columns to their widest item (your widths come back when off)"))
         f.addRow(check("clipboard_marks", "Tint copied (cyan), cut (yellow) and pasting (green) items"))
         f.addRow(check("bulk_rename_f2", "F2 with several items selected opens Bulk rename"))
         f.addRow(check("context_archive", "Extract and Add to archive in the right-click menu",

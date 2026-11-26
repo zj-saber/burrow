@@ -5,10 +5,11 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import QDir, QModelIndex, QPointF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPalette, QPen
+import time
+
+from PySide6.QtCore import QDir, QEasingCurve, QModelIndex, QPropertyAnimation, QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (QAbstractItemView, QColumnView, QFileSystemModel, QFrame, QListView,
-                               QStyledItemDelegate, QStyleOptionViewItem)
+                               QStyledItemDelegate)
 
 
 class _RowDelegate(QStyledItemDelegate):
@@ -21,28 +22,81 @@ class _RowDelegate(QStyledItemDelegate):
         return QSize(s.width(), max(s.height(), self.height))
 
     def paint(self, painter, option, index):
-        """Row, then a tiny faint chevron on folders (instead of Qt's large arrow)."""
-        opt = option
-        is_dir = index.model().isDir(index)
-        if is_dir:
-            opt = QStyleOptionViewItem(option)
-            opt.rect = option.rect.adjusted(0, 0, -12, 0)      # keep the name clear of it
-        super().paint(painter, opt, index)
+        """Just the row: no folder arrows (the folder icon says it), plus the clipboard tint."""
+        super().paint(painter, option, index)
         from . import marks
         if marks.MARKS:
             k = marks.MARKS.get(os.path.normpath(index.model().filePath(index)).lower())
             if k:
                 painter.fillRect(option.rect, marks.color(k))
-        if is_dir:
-            r = option.rect
-            c = QColor(option.palette.color(QPalette.ColorRole.Text))
-            c.setAlpha(90)
-            painter.save()
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            painter.setPen(QPen(c, 1.2))
-            x, y = r.right() - 8, r.center().y() + 0.5
-            painter.drawPolyline([QPointF(x - 2, y - 3), QPointF(x + 1, y), QPointF(x - 2, y + 3)])
-            painter.restore()
+
+
+class _Column(QListView):
+    """One column: smooth pixel scrolling that keeps 3 rows visible ahead of the cursor, and
+    arrow keys / typing handed to the owner (in and out of folders, search the newest column)."""
+    AHEAD = 3
+
+    def __init__(self, owner, parent=None):
+        super().__init__(parent)
+        self.owner = owner
+        self.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self._anim = QPropertyAnimation(self.verticalScrollBar(), b"value", self)
+        self._anim.setDuration(120)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    def _row_h(self) -> int:
+        return max(16, self.owner._delegate.height)
+
+    def _glide(self, target: int):
+        sb = self.verticalScrollBar()
+        target = max(0, min(sb.maximum(), target))
+        base = self._anim.endValue() if self._anim.state() == QPropertyAnimation.State.Running else sb.value()
+        if target == base:
+            return
+        self._anim.stop()
+        self._anim.setStartValue(sb.value())
+        self._anim.setEndValue(target)
+        self._anim.start()
+
+    def scrollTo(self, index, hint=QAbstractItemView.ScrollHint.EnsureVisible):
+        if hint != QAbstractItemView.ScrollHint.EnsureVisible or not index.isValid():
+            return super().scrollTo(index, hint)
+        sb = self.verticalScrollBar()
+        r = self.visualRect(index)
+        h = r.height() or self._row_h()
+        vh = self.viewport().height()
+        y = r.top() + sb.value()                       # the row's position in the whole list
+        base = self._anim.endValue() if self._anim.state() == QPropertyAnimation.State.Running else sb.value()
+        margin = min(self.AHEAD * h, max(0, (vh - h) // 2))
+        if y - base < margin:
+            self._glide(y - margin)
+        elif y + h - base > vh - margin:
+            self._glide(y + h - vh + margin)
+
+    def wheelEvent(self, ev):
+        steps = ev.angleDelta().y() / 120
+        if ev.pixelDelta().isNull() and steps and not ev.modifiers():
+            base = self._anim.endValue() if self._anim.state() == QPropertyAnimation.State.Running \
+                else self.verticalScrollBar().value()
+            self._glide(int(base - steps * 3 * self._row_h()))      # 3 rows a notch, gliding
+            ev.accept()
+            return
+        super().wheelEvent(ev)
+
+    def keyPressEvent(self, ev):
+        k, mods = ev.key(), ev.modifiers() & ~Qt.KeyboardModifier.KeypadModifier
+        if not mods and k == Qt.Key.Key_Right:
+            self.owner.go_in()
+            return
+        if not mods and k == Qt.Key.Key_Left:
+            self.owner.go_out()
+            return
+        text = ev.text()
+        typing = self.owner.searching()          # a space only counts in the middle of a name
+        if text and text.isprintable() and (typing or not text.isspace())                 and not (mods & ~Qt.KeyboardModifier.ShiftModifier):
+            self.owner.type_search(text)
+            return
+        super().keyPressEvent(ev)
 
 
 class ColumnsView(QColumnView):
@@ -58,6 +112,8 @@ class ColumnsView(QColumnView):
         self.fs = QFileSystemModel(self)
         self.fs.setReadOnly(True)                 # drag out only; moves go through Burrow
         self.fs.setRootPath("")                   # "This PC": drives in the first column
+        # columns copy these from the view (initializeColumn): pixel scrolling for smooth glides
+        self.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.set_show_hidden(show_hidden)
         self.setModel(self.fs)
         self._delegate = _RowDelegate(row_height, self)
@@ -77,9 +133,25 @@ class ColumnsView(QColumnView):
         self.activated.connect(self._activated)
         self.selectionModel().currentChanged.connect(self._current_changed)
         self._quiet = False
+        # arrowing through folders only opens the tab's folder once you pause: each stop used
+        # to reload the address bar, inspector and status bar (18-40 ms a step)
+        self._nav_timer = QTimer(self)
+        self._nav_timer.setSingleShot(True)
+        self._nav_timer.setInterval(140)
+        self._nav_timer.timeout.connect(self._emit_current)
+        self._pending_in = None                 # a folder → was pressed on while still loading
+        self.fs.directoryLoaded.connect(self._dir_loaded)
+        self._search = ("", 0.0, None)          # typed text, when, the column searched
 
     def createColumn(self, index):
-        col = super().createColumn(index)       # each column is its own list: route its menu here
+        col = _Column(self, self.viewport())    # our own list: smooth scrolling and arrow keys
+        self.initializeColumn(col)
+        col.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        col.verticalScrollBar().setSingleStep(max(16, self._delegate.height) if hasattr(self, "_delegate") else 24)
+        col.setRootIndex(index)
+        if self.fs.canFetchMore(index):
+            self.fs.fetchMore(index)
+        # each column is its own list: route its menu here
         col.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         col.customContextMenuRequested.connect(lambda pos: self.contextMenu.emit(pos))
         col.setTextElideMode(Qt.TextElideMode.ElideMiddle)
@@ -146,11 +218,90 @@ class ColumnsView(QColumnView):
     def _current_changed(self, cur: QModelIndex, _prev):
         if self._quiet or not cur.isValid():
             return
+        self._nav_timer.start()
+
+    def _emit_current(self):
+        cur = self.currentIndex()
+        if not cur.isValid():
+            return
         p = self.path_of(cur)
         if self.fs.isDir(cur):
             self.folderChosen.emit(p)
         else:
             self.fileChosen.emit(p)
+
+    # ----- keyboard -----------------------------------------------------------------------
+    def column_for(self, parent: QModelIndex):
+        """The column listing parent's contents, if it's open."""
+        for c in self.findChildren(_Column):
+            if c.rootIndex() == parent and c.isVisible():
+                return c
+        return None
+
+    def _go_to(self, idx: QModelIndex):
+        self.setCurrentIndex(idx)
+        self.selectionModel().select(idx, self.selectionModel().SelectionFlag.ClearAndSelect)
+        col = self.column_for(idx.parent())
+        if col is not None:
+            col.setFocus()
+            col.scrollTo(idx)
+
+    def go_in(self):
+        """→: into the selected folder (its first item). A folder still being read is entered
+        as soon as it's loaded."""
+        cur = self.currentIndex()
+        if not cur.isValid() or not self.fs.isDir(cur):
+            return
+        if self.fs.rowCount(cur):
+            self._pending_in = None
+            self._go_to(self.fs.index(0, 0, cur))
+        else:
+            self._pending_in = self.path_of(cur)
+            if self.fs.canFetchMore(cur):
+                self.fs.fetchMore(cur)
+
+    def _dir_loaded(self, path: str):
+        if self._pending_in and os.path.normcase(os.path.normpath(path)) == os.path.normcase(self._pending_in):
+            cur = self.currentIndex()
+            if cur.isValid() and os.path.normcase(self.path_of(cur)) == os.path.normcase(self._pending_in):
+                QTimer.singleShot(0, self.go_in)
+            else:
+                self._pending_in = None
+
+    def go_out(self):
+        """←: back to the parent folder, one level at a time up to the drives."""
+        self._pending_in = None
+        cur = self.currentIndex()
+        if cur.isValid() and cur.parent().isValid():
+            self._go_to(cur.parent())
+
+    def searching(self) -> bool:
+        typed, when, _col = self._search
+        return bool(typed) and time.monotonic() - when <= 1.0
+
+    def type_search(self, text: str):
+        """Typing jumps to a matching name in the newest column: inside the selected folder,
+        or the current column when a file is selected. Letters typed within a second add up."""
+        typed, when, col = self._search
+        now = time.monotonic()
+        cur = self.currentIndex()
+        if now - when > 1.0 or col is None or not col.isVisible():
+            typed = ""
+            parent = cur if (cur.isValid() and self.fs.isDir(cur) and self.fs.rowCount(cur)) else \
+                (cur.parent() if cur.isValid() else QModelIndex())
+            col = self.column_for(parent)
+        if col is None:
+            return
+        typed += text.lower()
+        self._search = (typed, now, col)
+        root = col.rootIndex()
+        n = self.fs.rowCount(root)
+        names = [(i, self.fs.fileName(self.fs.index(i, 0, root)).lower()) for i in range(n)]
+        hit = next((i for i, nm in names if nm.startswith(typed)), None)
+        if hit is None:
+            hit = next((i for i, nm in names if typed in nm), None)
+        if hit is not None:
+            self._go_to(self.fs.index(hit, 0, root))
 
     def _activated(self, idx: QModelIndex):
         if idx.isValid() and not self.fs.isDir(idx):

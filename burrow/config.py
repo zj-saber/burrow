@@ -127,6 +127,9 @@ DEFAULTS = {
     "sync_excludes": "Thumbs.db; desktop.ini; ~$*; *.tmp",
     "rename_recent": {},            # Bulk rename: last used fields
     "bulk_rename_f2": True,         # F2 with several items selected opens Bulk rename
+    "folder_layouts": {},           # folder -> its own column layout ("Save layout for this folder")
+    "auto_fit_columns": False,      # columns fit their widest item; your widths are kept for when it's off
+    "network_keepalive": True,      # keep an open network folder's connection from idling out
     "clipboard_marks": True,        # tint copied (cyan), cut (yellow) and pasting (green) items
     "context_archive": True,        # right-click: Extract here / Extract to folder / Add to archive
     "confirm_delete_permanent": True,
@@ -159,6 +162,7 @@ def _norm(p: str) -> str:
 
 class Config(QObject):
     viewChanged = Signal(object)      # the FolderView that made the change, or None
+    folderLayoutChanged = Signal(str, object)   # folder key, the FolderView that changed it
     settingsChanged = Signal()
     bookmarksChanged = Signal()
     bookmarkAdded = Signal(str)
@@ -222,6 +226,25 @@ class Config(QObject):
         self.view_version += 1
         self.schedule_save()
         self.viewChanged.emit(source)
+
+    # ----- layouts saved for one folder (override the shared one there) ----------
+    @staticmethod
+    def folder_key(path: str) -> str:
+        return os.path.normcase(os.path.normpath(path)) if path and not path.startswith("::") else (path or "")
+
+    def folder_layout(self, path: str) -> dict | None:
+        lay = self.data["folder_layouts"].get(self.folder_key(path))
+        return normalize_layout(lay) if lay else None
+
+    def set_folder_layout(self, path: str, layout: dict | None, source=None):
+        key = self.folder_key(path)
+        if layout is None:
+            if self.data["folder_layouts"].pop(key, None) is None:
+                return
+        else:
+            self.data["folder_layouts"][key] = normalize_layout(layout)
+        self.schedule_save()
+        self.folderLayoutChanged.emit(key, source)
 
     def presets(self) -> dict:
         merged = {k: v for k, v in BUILTIN_PRESETS.items()}
