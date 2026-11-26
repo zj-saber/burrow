@@ -56,6 +56,7 @@ DATE_FORMATS = [
 
 
 def normalize_layout(layout: dict | None) -> dict:
+    """A complete, valid column layout from whatever was saved (unknown keys dropped)."""
     base = copy.deepcopy(BUILTIN_PRESETS["Details + Dates"])
     base["widths"] = dict(DEFAULT_WIDTHS)
     if not isinstance(layout, dict):
@@ -111,6 +112,7 @@ DEFAULTS = {
     "sidebar_drag_reorder": True,   # drag sidebar headings to reorder sections
     "icon_size": 16,                # list / columns icon size (slider at the bottom)
     "ctrl_wheel_icon_size": True,   # Ctrl+wheel over the list changes the icon size (like Explorer)
+    "columns_sizes": True,          # columns view: small sizes after names (folders via Everything)
     "view_mode": "list",            # new tabs open as "list" or "columns"
     "status_sort_toggle": True,     # status bar: Sort folders-first / mixed
     "status_view_toggle": True,     # status bar: View list / columns
@@ -163,6 +165,7 @@ def _norm(p: str) -> str:
 
 
 class Config(QObject):
+    """Settings in %APPDATA%/Burrow/settings.json: defaults, bookmarks, layouts; saved shortly after a change."""
     viewChanged = Signal(object)      # the FolderView that made the change, or None
     folderLayoutChanged = Signal(str, object)   # folder key, the FolderView that changed it
     settingsChanged = Signal()

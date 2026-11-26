@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QCompleter, QDockWidget,
 from PySide6.QtCore import QItemSelection, QItemSelectionModel
 
 from . import dialogs, fileops, foldercolor, integration, tags, theme
-from .chrome import AddressArea, TabHost, UsagePill
+from .chrome import AddressArea, UsagePill
 from PySide6.QtCore import QPoint, QRect
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QSplitter
@@ -164,6 +164,7 @@ class DropArea(QWidget):
                                    f" border: 2px solid {accent}; border-radius: 8px;")
 
     def _zone_at(self, pos):
+        """Which drop zone (a pane's edge to split, or its middle to move) is under the dragged tab."""
         from .chrome import SnapTabBar
         src = SnapTabBar.dragging
         if src is None:
@@ -197,6 +198,7 @@ class DropArea(QWidget):
             ev.ignore()
 
     def dragMoveEvent(self, ev):
+        """Show the highlight for the zone under the dragged tab."""
         if not ev.mimeData().hasFormat(TAB_MIME_APP):
             ev.ignore()
             return
@@ -249,6 +251,7 @@ def schedule_trim(delay_ms: int = 3000):
 
 
 def trim_memory():
+    """Burrow is hidden in the tray: drop previews, caches and decoders, then return the memory to Windows."""
     if any(w.isVisible() for w in WINDOWS):
         return                                   # came back meanwhile
     import gc
@@ -330,6 +333,7 @@ def route_external(args):
 
 
 class MainWindow(QMainWindow):
+    """One Burrow window: panes of tabs, sidebar, inspector, status bar, menus and file commands."""
     def __init__(self, config: Config, paths: list[str], primary: bool = True):
         super().__init__()
         self.config = config
@@ -398,6 +402,7 @@ class MainWindow(QMainWindow):
 
     # ----- construction ----------------------------------------------------------
     def _action(self, text, slot, shortcut=None, *, tree=False, checkable=False, icon=None, tip=None):
+        """Make a window action (menu item / shortcut); tree=True also puts it on every file list."""
         a = QAction(text, self)
         if icon is not None:
             a.setIcon(icon)
@@ -421,6 +426,7 @@ class MainWindow(QMainWindow):
         return a
 
     def _make_actions(self):
+        """Create every command with its shortcut (see SHORTCUTS for the Explorer / classic keys)."""
         S, SP = self.style().standardIcon, QStyle.StandardPixmap
         A = self._action
         self.act_back = A("Back", self.go_back, "Alt+Left", icon=S(SP.SP_ArrowBack), tip="Back (Alt+Left)")
@@ -526,6 +532,7 @@ class MainWindow(QMainWindow):
     def _make_ui(self):
         # Panes (each with its own tab strip) live in a splitter inside the drop area. With one
         # pane the navigation bar sits between its tabs and files; when split it moves on top.
+        """Build the window: pane area, navigation bar, sidebar, inspector and status bar."""
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.setChildrenCollapsible(False)
         self.splitter.setHandleWidth(5)
@@ -711,6 +718,7 @@ class MainWindow(QMainWindow):
         self.statusBar().messageChanged.connect(self._status_message)
 
     def _make_menus(self):
+        """The menu bar, and the same menus behind the ☰ button."""
         mb = self.menuBar()
         f = mb.addMenu("&File")
         for a in (self.act_new_window, self.act_new_tab, self.act_reopen_tab, None, self.act_new_folder, self.act_new_file,
@@ -833,6 +841,7 @@ class MainWindow(QMainWindow):
         self.config.set("show_menubar", on)
 
     def apply_theme(self):
+        """Recolor the chrome for the current theme (the file lists are themed by palette only)."""
         c = theme.apply(QApplication.instance(), self.config.get("theme"), self.config.get("palette"))
         self._theme_key = (self.config.get("theme"), c["name"], self.config.get("palette"))
         if self._translucent():
@@ -868,6 +877,7 @@ class MainWindow(QMainWindow):
             self.menu_btn.setText("☰")
 
     def _fill_columns_menu(self):
+        """View ▸ Columns: column switches, Fit to content and the layout save commands."""
         from .config import COLUMN_TITLES, COLUMNS
         m = self.columns_menu
         m.clear()
@@ -1096,6 +1106,7 @@ class MainWindow(QMainWindow):
         self.config.set("split", "")
 
     def _remove_pane(self, p):
+        """Close a pane and fold the splitters around it."""
         if self.active_pane is p:
             i = self.panes.index(p)
             self.active_pane = self.panes[i - 1] if i > 0 else self.panes[1]
@@ -1113,6 +1124,7 @@ class MainWindow(QMainWindow):
         self._sync_location()
 
     def _move_tab(self, src, index, dst, remove_empty=True):
+        """Move one tab to another pane (closing the source pane if it's left empty)."""
         v = src.tabs.widget(index)
         if v is None:
             return
@@ -1173,6 +1185,7 @@ class MainWindow(QMainWindow):
         reuse = [self.panes[0]]
 
         def build(node, s):
+            """Recreate one level of saved splits and the tabs in each pane."""
             s.setOrientation(Qt.Orientation.Horizontal if node.get("o") == "h" else Qt.Orientation.Vertical)
             for child in node.get("c", [])[:MAX_PANES]:
                 if "c" in child:
@@ -1203,6 +1216,7 @@ class MainWindow(QMainWindow):
         return True
 
     def _tab_menu(self, pane, pos):
+        """Right-click on a tab: close, split, move, new window."""
         i = pane.tabs.bar.tabAt(pos)
         if i < 0:
             return
@@ -1225,6 +1239,7 @@ class MainWindow(QMainWindow):
         m.exec(pane.tabs.bar.mapToGlobal(pos))
 
     def new_tab(self, path=None, activate=True, after_current=True):
+        """Open a folder in a new tab of the active pane and wire the view to the window."""
         if path is None:
             path = self.config.get("new_tab_path") or HOME
         v = FolderView(self.config, self)
@@ -1251,6 +1266,7 @@ class MainWindow(QMainWindow):
         return v
 
     def close_tab(self, index, pane=None):
+        """Close a tab (remembered for Ctrl+Shift+T); the last tab of a split pane closes the pane."""
         pane = pane or self.active_pane
         if index < 0 or pane not in self.panes:
             return
@@ -1280,6 +1296,7 @@ class MainWindow(QMainWindow):
             self.tabs.setCurrentIndex((self.tabs.currentIndex() + delta) % n)
 
     def eventFilter(self, obj, ev):
+        """Tab strip: double-click on empty space opens a tab, middle-click on a tab closes it."""
         for p in self.panes:
             if obj is p.strip and ev.type() == QEvent.Type.MouseButtonDblClick:
                 self.set_active_pane(p)
@@ -1309,6 +1326,7 @@ class MainWindow(QMainWindow):
             self.inspector_timer.start()
 
     def _sync_location(self):
+        """The active tab changed folder: update address bar, buttons, title, sidebar and status."""
         v = self.view()
         if v is None or v.path is None:
             return
@@ -1346,6 +1364,7 @@ class MainWindow(QMainWindow):
         self.inspector_timer.start()
 
     def _update_status(self):
+        """Item and selection counts at the bottom left."""
         v = self.view()
         if v is None:
             return
@@ -1368,6 +1387,7 @@ class MainWindow(QMainWindow):
         self.status_left.setText(text or self._status_text)
 
     def _sync_sort_mode(self, v=None):
+        """Keep the status bar's Sort switch in step with the active view."""
         v = v or self.view()
         if v is None:
             return
@@ -1538,6 +1558,7 @@ class MainWindow(QMainWindow):
         c.blockSignals(False)
 
     def _settings_changed(self):
+        """Settings were saved: apply whatever changed, cheapest checks first."""
         self.act_hidden.setChecked(self.config.get("show_hidden"))
         self.apply_ui_switches()
         bd = (self.config.get("backdrop"), self.config.get("backdrop_tint"))
@@ -1595,6 +1616,7 @@ class MainWindow(QMainWindow):
             self.view().focus_list()
 
     def _address_entered(self):
+        """Enter in the address bar: open a folder, select a file, or go to a server."""
         text = self.address.text().strip()
         v = self.view()
         if text.lower() in ("this pc", "computer", "my computer", ""):
@@ -1628,6 +1650,7 @@ class MainWindow(QMainWindow):
 
     # ----- context menu ------------------------------------------------------------------
     def _context_menu(self, v: FolderView, pos):
+        """Right-click in a file list (kept deliberately short)."""
         where, on_item = v.menu_pos(pos)
         if not on_item and not v.columns_active():
             v.tree.clearSelection()
@@ -1835,6 +1858,7 @@ class MainWindow(QMainWindow):
         return True
 
     def _build_plan(self, srcs, target, move):
+        """Turn a copy/move request into [source, target, mode] steps, asking about name clashes."""
         plan, conflicts, problems = [], [], []
         for s in srcs:
             name = os.path.basename(s)
@@ -1881,6 +1905,7 @@ class MainWindow(QMainWindow):
         return plan
 
     def _job_finished(self, runner):
+        """A copy/move finished: tags follow the items, the list refreshes."""
         from . import marks
         marks.remove_pasting([d for _s, d, _m in runner.job.plan])
         for src, dst, _mode in runner.job.plan:      # tags follow items Burrow moved or copied
@@ -1895,6 +1920,7 @@ class MainWindow(QMainWindow):
         self.view().refresh()
 
     def delete(self, permanent):
+        """Delete the selection: Recycle Bin, or permanently (Shift+Del), asking first if set to."""
         es = self._selected()
         if not es:
             return
@@ -1928,6 +1954,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Some items couldn't be deleted", 6000)
 
     def _create(self, name, is_dir):
+        """New folder / text file with a free name, then start renaming it."""
         v = self.view()
         if is_location(v.path):
             return
@@ -2287,6 +2314,7 @@ class MainWindow(QMainWindow):
             self.inspector.media.pause()
 
     def closeEvent(self, ev):
+        """Closing: hide to the tray when Burrow runs in the background, else save and quit."""
         others = [w for w in WINDOWS if w is not self and w.isVisible()]
         if not self.primary:
             # an extra window: just close it; the last one standing ends the app (unless in tray)
@@ -2345,6 +2373,7 @@ class MainWindow(QMainWindow):
 
 
 def main():
+    """Start Burrow: hand off to a running copy if there is one, else open the window, tray and watchers."""
     if sys.platform == "win32":
         try:
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Burrow.FileManager")

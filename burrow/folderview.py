@@ -101,6 +101,7 @@ class NameDelegate(RowDelegate):
     """Inline rename that pre-selects the name without its extension, like Explorer."""
 
     def setEditorData(self, editor, index):
+        """Start renaming with the name selected but not the extension, like Explorer."""
         super().setEditorData(editor, index)
         if isinstance(editor, QLineEdit):
             e = index.data(ENTRY_ROLE)
@@ -166,6 +167,7 @@ class FilterEdit(QLineEdit):
 
 
 class FileTree(QTreeView):
+    """The file list: type-to-filter, keyboard handling and drag and drop."""
     dropRequested = Signal(list, str, bool)   # sources, target folder, move?
 
     def __init__(self, owner: "FolderView"):
@@ -183,6 +185,7 @@ class FileTree(QTreeView):
         return self.state() == QAbstractItemView.State.EditingState
 
     def keyPressEvent(self, ev):
+        """Typing filters, Backspace goes up, ← can go to the sidebar, Space/arrows control media."""
         mods = ev.modifiers() & ~(Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.KeypadModifier)
         text = ev.text()
         if (ev.key() == Qt.Key.Key_Space and not self.owner.filter_text() and mods == Qt.KeyboardModifier.NoModifier
@@ -207,6 +210,7 @@ class FileTree(QTreeView):
         super().keyPressEvent(ev)
 
     def mousePressEvent(self, ev):
+        """Back / forward mouse buttons navigate."""
         b = ev.button()
         if b == Qt.MouseButton.BackButton:
             self.owner.go_back()
@@ -270,6 +274,7 @@ class FileTree(QTreeView):
 
 
 class FolderView(QWidget):
+    """One tab: a folder listing with history, filter, layout, columns view and network handling."""
     pathChanged = Signal(str)
     loaded = Signal()
     selectionChanged = Signal()
@@ -399,6 +404,7 @@ class FolderView(QWidget):
 
     # ----- navigation -------------------------------------------------------------
     def navigate(self, path: str, record: bool = True, select: str | None = None) -> bool:
+        """Open a folder in this tab (network drives reconnect and load in the background)."""
         path = normalize_path(path)
         reconnect = places.needs_reconnect(path)   # a remembered network drive, not connected now
         if not _exists(path):
@@ -523,6 +529,7 @@ class FolderView(QWidget):
             c.contextMenu.connect(lambda pos: self.contextMenuRequested.emit(pos))
             c.selectionModel().selectionChanged.connect(lambda *_: self.selectionChanged.emit())
             c.extra_actions = list(self.tree.actions())   # Ctrl+C, Del, F2... work in columns too
+            c.set_show_sizes(bool(self.config.get("columns_sizes")), bool(self.config.get("everything_sizes")))
             self._lay.insertWidget(2, c, 1)
         if self.columns is not None:
             self.columns.setVisible(want)
@@ -615,6 +622,7 @@ class FolderView(QWidget):
             self.navigate(parent, select=self.path)
 
     def refresh(self):
+        """Reload the folder, keeping selection and scroll position."""
         if self.path is None:
             return
         if not _exists(self.path):
@@ -680,6 +688,7 @@ class FolderView(QWidget):
         self.error_label.setVisible(bool(text))
 
     def _loaded(self, token, res, select, current, scroll):
+        """A listing arrived: show it, or the error (network errors retry by themselves)."""
         if token != self._load_token:          # the user has moved on
             return
         self.loading = False
@@ -735,6 +744,7 @@ class FolderView(QWidget):
         return self.proxy.entry(self.tree.currentIndex())
 
     def select_paths(self, paths: list[str], current: str | None = None):
+        """Select these items and make one of them current."""
         if self.columns_active() and (current or paths):
             self.columns.show_path(self.path, current or paths[0])
         sm = self.tree.selectionModel()
@@ -761,13 +771,19 @@ class FolderView(QWidget):
             sm.setCurrentIndex(self.proxy.index(0, 0), QItemSelectionModel.SelectionFlag.NoUpdate)
 
     def edit_current(self):
+        """Rename the current item (inline in the list, a small dialog in columns view)."""
         if self.columns_active():
             es = self.selected_entries()
             if len(es) == 1 and not es[0].is_drive:
                 from PySide6.QtWidgets import QInputDialog
                 name, ok = QInputDialog.getText(self, "Rename", "New name:", text=es[0].name)
-                if ok and name.strip() and name.strip() != es[0].name:
-                    new = os.path.join(os.path.dirname(es[0].path), name.strip())
+                name = name.strip().rstrip(".")
+                if ok and name and name != es[0].name:
+                    from .model import name_problem
+                    if name_problem(name):
+                        self._rename_failed(name_problem(name))
+                        return
+                    new = os.path.join(os.path.dirname(es[0].path), name)
                     try:
                         os.rename(es[0].path, new)
                         tags.store().renamed(es[0].path, new)
@@ -792,6 +808,7 @@ class FolderView(QWidget):
         self.open_entries(entries)
 
     def open_entries(self, entries: list[Entry]):
+        """Open files with their apps (Windows' own security checks apply) and folders here."""
         dirs = [e for e in entries if e.is_dir]
         files = [e for e in entries if not e.is_dir]
         if len(files) > 12:
@@ -892,12 +909,17 @@ class FolderView(QWidget):
 
     # ----- auto-fit: columns as wide as their widest item ---------------------------------
     def _settings_changed(self):
+        if self.columns is not None:
+            sizes = (bool(self.config.get("columns_sizes")), bool(self.config.get("everything_sizes")))
+            if sizes != (self.columns.show_sizes, self.columns.folder_sizes_on):
+                self.columns.set_show_sizes(*sizes)
         on = bool(self.config.get("auto_fit_columns"))
         if on != self._auto_fit:
             self._auto_fit = on
             self.apply_layout()                  # off: your saved widths come back
 
     def fit_columns(self):
+        """Size each column to its widest item (not saved: your widths stay in the layout)."""
         if not self._auto_fit:
             return
         h = self.tree.header()
@@ -914,6 +936,7 @@ class FolderView(QWidget):
             self._applying = False
 
     def apply_layout(self):
+        """Show this folder's layout (or the shared one): columns, order, widths, sort."""
         lay = self.current_layout()
         h = self.tree.header()
         self._applying = True
@@ -935,6 +958,7 @@ class FolderView(QWidget):
         self.fit_columns()
 
     def read_layout(self, prune: bool = False) -> dict:
+        """The layout as it's on screen now; prune keeps only shown columns' widths."""
         h = self.tree.header()
         cols = []
         for v in range(h.count()):
@@ -1000,6 +1024,7 @@ class FolderView(QWidget):
         self._layout_edited()
 
     def _header_menu(self, pos):
+        """Right-click on a column header: columns, fit, layouts and presets."""
         m = QMenu(self)
         for key in COLUMNS:
             a = m.addAction(COLUMN_TITLES[key])

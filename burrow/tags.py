@@ -42,6 +42,7 @@ ENABLED = True       # Settings: show tags (dots, menu, sidebar)
 
 
 class TagStore(QObject):
+    """Color tags per path, saved next to the settings and kept in step with renames and moves."""
     changed = Signal()
 
     def __init__(self):

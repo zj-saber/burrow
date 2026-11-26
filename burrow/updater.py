@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QLabel, QProgressBar, 
 from . import __version__
 
 REPO = "zj-saber/burrow"
+DOWNLOAD_PREFIX = f"https://github.com/{REPO}/releases/download/"   # the only place updates come from
 API = f"https://api.github.com/repos/{REPO}/releases/latest"
 PAGE = f"https://github.com/{REPO}/releases/latest"
 TMP_PREFIX = "burrow-update-"
@@ -39,6 +40,15 @@ def parse_version(s: str) -> tuple:
 
 def is_newer(latest: str, current: str = __version__) -> bool:
     return parse_version(latest) > parse_version(current)
+
+
+def sha256_of(path: str) -> str:
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def install_dir() -> str | None:
@@ -79,6 +89,7 @@ def sync_registered_version():
 
 
 class Updater(QObject):
+    """Talks to GitHub: latest release, and downloading its zip (checked against GitHub's SHA-256)."""
     found = Signal(dict)          # version, notes, zip, size, page
     upToDate = Signal(str)        # latest version
     failed = Signal(str)
@@ -104,6 +115,7 @@ class Updater(QObject):
         reply.finished.connect(lambda: self._checked(reply))
 
     def _checked(self, reply):
+        """Read the release info; only this repo's zip with a published checksum can be installed."""
         reply.deleteLater()
         if reply.error() != QNetworkReply.NetworkError.NoError:
             self.failed.emit(reply.errorString())
@@ -119,11 +131,16 @@ class Updater(QObject):
         if not is_newer(version):
             self.upToDate.emit(version)
             return
+        url = asset.get("browser_download_url", "") if asset else ""
+        digest = (asset.get("digest") or "") if asset else ""
+        ok = url.startswith(DOWNLOAD_PREFIX) and digest.startswith("sha256:")
         self.found.emit({"version": version, "notes": data.get("body") or "", "page": data.get("html_url") or PAGE,
-                         "zip": asset["browser_download_url"] if asset else None,
+                         # without a GitHub checksum (or from anywhere else) Burrow won't install it
+                         "zip": url if ok else None, "sha256": digest[7:].lower() if ok else "",
                          "size": asset.get("size", 0) if asset else 0})
 
     def download(self, info: dict):
+        self._expected = info.get("sha256", "")
         folder = tempfile.mkdtemp(prefix=TMP_PREFIX)
         path = os.path.join(folder, f"Burrow-{info['version']}.zip")
         self._file = open(path, "wb")
@@ -133,6 +150,7 @@ class Updater(QObject):
         reply.finished.connect(lambda: self._downloaded(reply, path))
 
     def _downloaded(self, reply, path):
+        """Download finished: keep it only if its SHA-256 matches what GitHub published."""
         self._file.write(bytes(reply.readAll().data()))
         self._file.close()
         reply.deleteLater()
@@ -140,6 +158,10 @@ class Updater(QObject):
         if reply.error() != QNetworkReply.NetworkError.NoError:
             self.failed.emit("Download stopped." if reply.error() == QNetworkReply.NetworkError.OperationCanceledError
                              else reply.errorString())
+            return
+        if sha256_of(path) != self._expected:
+            os.remove(path)
+            self.failed.emit("The download doesn't match the checksum GitHub published, so it wasn't installed.")
             return
         self.downloaded.emit(path)
 
@@ -247,6 +269,7 @@ class UpdateDialog(QDialog):
         self.sub.setText(f"You have {__version__}, the latest release.")
 
     def _failed(self, msg):
+        """Show what went wrong and offer the releases page instead."""
         self.bar.hide()
         try:
             self.close_btn.clicked.disconnect()
@@ -262,6 +285,7 @@ class UpdateDialog(QDialog):
         self.info = dict(self.info or {}, zip=None, page=(self.info or {}).get("page", PAGE))
 
     def _show(self, info):
+        """Show the new version, its notes, and whether this copy can update itself."""
         self.info = info
         self.win.config.set("update_checked", int(time.time()))
         self.title.setText(f"Burrow {info['version']} is available")
@@ -281,6 +305,7 @@ class UpdateDialog(QDialog):
         self.skip.show()
 
     def _go(self):
+        """Update now: download (or open the releases page when this copy can't update itself)."""
         if not (can_install() and self.info and self.info.get("zip")):
             from PySide6.QtGui import QDesktopServices
             QDesktopServices.openUrl(QUrl((self.info or {}).get("page") or PAGE))

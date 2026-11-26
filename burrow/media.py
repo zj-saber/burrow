@@ -37,6 +37,7 @@ class _SeekSlider(QSlider):
 
 
 class MediaPreview(QWidget):
+    """The inspector's video/audio player: poster frame, controls, cover art and tags."""
     metadataReady = Signal(dict)     # duration, title, artist, album, resolution, codecs...
     coverShown = Signal()
     failed = Signal(str)
@@ -111,6 +112,7 @@ class MediaPreview(QWidget):
 
     # ----- setup -------------------------------------------------------------------------
     def _ensure(self):
+        """Create the player and video surface on first use (they're heavy)."""
         if self._player is not None:
             return
         from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
@@ -140,6 +142,7 @@ class MediaPreview(QWidget):
 
     # ----- public ------------------------------------------------------------------------
     def load(self, path: str, video: bool):
+        """Open a video or song paused on its poster frame."""
         self._release_timer.stop()
         self._ensure()
         self.unload()
@@ -265,6 +268,7 @@ class MediaPreview(QWidget):
         self.time.setText(f"{fmt_time(self._player.position())} / {fmt_time(ms)}")
 
     def _on_status(self, status):
+        """Media loaded: take the poster frame (a frame a little way in) without playing."""
         from PySide6.QtMultimedia import QMediaPlayer
         if status == QMediaPlayer.MediaStatus.LoadedMedia and self._poster_pending:
             self._poster_pending = False
@@ -298,6 +302,7 @@ class MediaPreview(QWidget):
             self._fit_video(getattr(self, "_res", QSize(16, 9)))
 
     def _on_metadata(self):
+        """Fill in resolution, length, codec, artist, album and cover art."""
         from PySide6.QtMultimedia import QMediaMetaData
         md = self._player.metaData()
         K = QMediaMetaData.Key

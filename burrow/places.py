@@ -27,6 +27,7 @@ _server_re = re.compile(r"^\\\\([^\\/]+)[\\/]?$")
 
 # ----- background work --------------------------------------------------------------
 class _Bridge(QObject):
+    """Delivers results from worker threads to the GUI thread (a @Slot, so it's queued)."""
     done = Signal(object, object)
 
     def __init__(self):
@@ -151,6 +152,7 @@ def _net_connection(letter: str) -> tuple[str, int]:
 
 
 def _remembered_mappings() -> dict[str, str]:
+    """Mapped network drives Windows remembers (HKCU/Network), even disconnected ones."""
     import winreg
     out = {}
     try:

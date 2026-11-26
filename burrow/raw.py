@@ -15,7 +15,6 @@ import os
 import struct
 import sys
 
-from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QTransform
 
 RAW_EXTS = set("cr2 cr3 crw nef nrw arw srf sr2 dng raf orf pef srw rw2 rwl 3fr iiq mos mrw x3f erf kdc".split())
@@ -30,6 +29,7 @@ _TYPE_SIZES = {1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 6: 1, 7: 1, 8: 2, 9: 4, 10: 8, 11: 
 
 # ----- TIFF-based RAW ---------------------------------------------------------------------
 class _Tiff:
+    """Minimal TIFF/IFD reader: enough to find the JPEG previews and EXIF in a camera RAW."""
     def __init__(self, f, base=0):
         self.f, self.base = f, base
         f.seek(base)
@@ -58,6 +58,7 @@ class _Tiff:
         return tags, nxt
 
     def values(self, entry):
+        """The values of one IFD entry (read from its offset when they don't fit inline)."""
         typ, cnt, raw = entry
         size = _TYPE_SIZES.get(typ, 1) * cnt
         if size > 4:
@@ -83,6 +84,7 @@ class _Tiff:
 
 
 def _tiff_preview(f, info, base=0):
+    """Walk a RAW's IFDs for the largest embedded JPEG and the EXIF block."""
     t = _Tiff(f, base)
     jpegs = []          # (length, offset)
     exif_off = None
@@ -180,6 +182,7 @@ def _orient(img: QImage, o) -> QImage:
 
 # ----- Windows thumbnail fallback (IShellItemImageFactory) --------------------------------
 def shell_thumbnail(path: str, size: int = 1600) -> QImage:
+    """A large thumbnail from Windows' own codecs (HEIC, AVIF, RAW codec packs)."""
     if not WIN:
         return QImage()
     from ctypes import wintypes
@@ -263,6 +266,7 @@ def read_raw(path: str) -> dict:
 
 # ----- Blackmagic RAW (QuickTime container) -----------------------------------------------
 def _atoms(f, start, end):
+    """Yield (type, start, end) for each box in a QuickTime/MP4-style container."""
     pos = start
     while pos + 8 <= end:
         f.seek(pos)
@@ -282,6 +286,7 @@ def _atoms(f, start, end):
 
 
 def braw_info(path: str) -> dict:
+    """Resolution, frame rate, duration and codec of a Blackmagic RAW clip, from its header."""
     info = {}
     with open(path, "rb") as f:
         end = os.fstat(f.fileno()).st_size

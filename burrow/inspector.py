@@ -41,6 +41,7 @@ def _fmt_time(ts) -> str:
 
 
 class Inspector(QWidget):
+    """The right panel: preview (photo, PDF, video, text, archive, book) and file details."""
     detailsToggled = Signal(bool)
     splitChanged = Signal(float)     # preview height share, for Settings persistence
 
@@ -170,6 +171,7 @@ class Inspector(QWidget):
             self.detailsToggled.emit(on)
 
     def _reset(self):
+        """Clear the preview and free what it held."""
         self._shown = None
         self.media.unload()
         self.stage.hide()
@@ -245,6 +247,7 @@ class Inspector(QWidget):
     def show_entries(self, entries: list[Entry], folder: str | None):
         # Same single file still selected (window restored, folder refreshed...): keep the
         # playing video / zoomed photo exactly as it is instead of reloading it.
+        """Show the selection: one item in detail, several as a summary."""
         if len(entries) == 1 and ((self.media.is_active() and self.media._path == entries[0].path)
                                   or (self._zoom is not None and self._zoom.kind and self._zoom.path == entries[0].path)):
             return
@@ -267,6 +270,7 @@ class Inspector(QWidget):
             self._show_entry(entries[0])
 
     def _show_folder(self, folder: str | None):
+        """A folder's details: location, contents count and dates."""
         icons = icon_cache()
         if folder in (None, DRIVES):
             self._set_icon(icons.computer)
@@ -318,6 +322,7 @@ class Inspector(QWidget):
         c.size_of(folder, got)
 
     def _folder_counts(self, path: str):
+        """Count files and folders inside, stopping early on huge folders."""
         dirs = files = 0
         capped = False
         try:
@@ -340,6 +345,7 @@ class Inspector(QWidget):
         self._row("Contents", f"{files:,}{more} files, {dirs:,} folders")
 
     def _show_entry(self, e: Entry):
+        """One file: pick the preview for its type and fill in the details."""
         icons = icon_cache()
         self._set_icon(icons.icon(e))
         self.title.setText(e.name)
@@ -411,6 +417,7 @@ class Inspector(QWidget):
         places.run_async(lambda: archive.list_archive(path), lambda res: self._archive_ready(path, res, req))
 
     def _archive_ready(self, path: str, res: dict, req: int = 0):
+        """The archive listing arrived: show it as a folder tree with totals."""
         if self._shown != path or req != getattr(self, "_archive_req", 0):
             return                                  # the selection moved on
         self._set_note("")
@@ -428,6 +435,7 @@ class Inspector(QWidget):
         nodes: dict[str, QTreeWidgetItem] = {}
 
         def node(parts) -> QTreeWidgetItem | None:
+            """The tree item for a folder path inside the archive (created on demand)."""
             if not parts:
                 return None
             key = "/".join(parts)
@@ -510,6 +518,7 @@ class Inspector(QWidget):
         places.run_async(lambda: epub.read_book(path), lambda res: self._epub_ready(path, res, req))
 
     def _epub_ready(self, path, res, req=0):
+        """The book's details arrived: cover, title, author and the reader."""
         if self._shown != path or req != getattr(self, "_epub_req", 0):
             return
         self._set_note("")
@@ -554,6 +563,7 @@ class Inspector(QWidget):
         places.run_async(lambda: raw.read_raw(path), lambda res: self._raw_ready(path, req, res))
 
     def _raw_ready(self, path, req, res):
+        """A camera RAW's embedded preview and shooting details arrived."""
         if self._shown != path or req != getattr(self, "_raw_req", 0) or not isinstance(res, dict):
             return
         self._set_note("")
@@ -587,6 +597,7 @@ class Inspector(QWidget):
         places.run_async(lambda: raw.braw_info(path), lambda res: self._braw_ready(path, res))
 
     def _braw_ready(self, path, res):
+        """Blackmagic RAW clip details arrived."""
         if self._shown != path or not isinstance(res, dict):
             return
         if res.get("error"):
@@ -604,6 +615,7 @@ class Inspector(QWidget):
                        "Double-click opens the clip in Blackmagic RAW Player.")
 
     def _preview_pdf(self, e: Entry):
+        """Show a PDF in the zoomable viewer."""
         try:
             info = self.zoom.load_pdf(e.path)
         except ImportError:
@@ -659,6 +671,7 @@ class Inspector(QWidget):
             ViewerWindow(self.zoom, os.path.basename(self.zoom.path), self.window()).show()
 
     def _preview_text(self, e: Entry):
+        """Show the start of a text file (TEXT_LIMIT bytes) with syntax colors."""
         try:
             with open(e.path, "rb") as f:
                 data = f.read(TEXT_LIMIT)

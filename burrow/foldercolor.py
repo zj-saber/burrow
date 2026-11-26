@@ -32,6 +32,7 @@ SIZES = [16, 20, 24, 32, 40, 48, 64, 96, 128, 256]
 
 # ----- icons ----------------------------------------------------------------------------
 def _render(size: int, color: str) -> bytes:
+    """Draw a colored folder icon at one size (written into the folder's .ico)."""
     c = QColor(color)
     back = c.darker(135)
     img = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)

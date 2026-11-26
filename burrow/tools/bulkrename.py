@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, 
                                QVBoxLayout)
 
 from .. import tags, theme
-from ..model import INVALID_NAME_CHARS, natural_key
+from ..model import name_problem, natural_key
 
 CASES = ["Keep", "lower case", "UPPER CASE", "Title Case"]
 EXT_CASES = ["Keep", "lower case", "UPPER CASE"]
@@ -72,10 +72,9 @@ def problems(paths: list[str], names: list[str]) -> dict[int, str]:
     taken: dict = {}
     for i, (p, n) in enumerate(zip(paths, names)):
         folder = os.path.dirname(p)
-        if not n or n in (".", ".."):
-            bad[i] = "empty name"
-        elif any(c in INVALID_NAME_CHARS for c in n):
-            bad[i] = 'can\'t contain \\ / : * ? " < > |'
+        problem = name_problem(n)
+        if problem:
+            bad[i] = problem
         key = (os.path.normcase(folder), n.lower())
         if key in taken:
             bad[i] = bad[taken[key]] = "two files would get this name"
@@ -114,6 +113,7 @@ def rename_all(pairs: list[tuple[str, str]]) -> list[str]:
 
 
 class BulkRenameDialog(QDialog):
+    """Bulk rename: find & replace, pattern, counter and case, with a live preview."""
     def __init__(self, config, paths: list[str], parent=None):
         super().__init__(parent)
         self.config = config
@@ -207,6 +207,7 @@ class BulkRenameDialog(QDialog):
                 self.case.currentIndex(), self.ext_case.currentIndex())
 
     def _update(self, *_):
+        """Recompute every new name and mark the ones that can't be used."""
         try:
             self.names = new_names(self.paths, *self._args())
         except re.error as ex:

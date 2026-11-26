@@ -8,11 +8,25 @@ import os
 import time
 
 from PySide6.QtCore import QDir, QEasingCurve, QModelIndex, QPropertyAnimation, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import (QAbstractItemView, QColumnView, QFileSystemModel, QFrame, QListView,
                                QStyledItemDelegate)
 
 
+def compact_size(n: int) -> str:
+    """Sizes in columns view: MB by default, GB from 1 GB, TB from 1 TB."""
+    if n >= 1 << 40:
+        return f"{n / (1 << 40):.1f} TB"
+    if n >= 1 << 30:
+        return f"{n / (1 << 30):.1f} GB"
+    mb = n / (1 << 20)
+    if mb >= 10:
+        return f"{mb:.0f} MB"
+    return f"{max(mb, 0.1):.1f} MB" if n else "0 MB"
+
+
 class _RowDelegate(QStyledItemDelegate):
+    """Columns rows: a minimum height and the clipboard tint."""
     def __init__(self, height: int, parent=None):
         super().__init__(parent)
         self.height = height
@@ -22,8 +36,34 @@ class _RowDelegate(QStyledItemDelegate):
         return QSize(s.width(), max(s.height(), self.height))
 
     def paint(self, painter, option, index):
-        """Just the row: no folder arrows (the folder icon says it), plus the clipboard tint."""
-        super().paint(painter, option, index)
+        """The row (no folder arrows: the icon says it), an optional small size at its end, and
+        the clipboard tint. With sizes off this is one attribute check more than a plain row."""
+        view = self.parent()
+        size = view.size_for(index) if getattr(view, "show_sizes", False) else None
+        if size is None:
+            super().paint(painter, option, index)
+        else:
+            from PySide6.QtWidgets import QStyleOptionViewItem
+            text = compact_size(size)
+            font = option.font
+            font.setPointSizeF(max(6.5, font.pointSizeF() * 0.82))
+            from PySide6.QtGui import QFontMetrics
+            w = QFontMetrics(font).horizontalAdvance(text) + 10
+            full = QStyleOptionViewItem(option)                      # selection/hover across the whole row
+            self.initStyleOption(full, index)
+            from PySide6.QtWidgets import QStyle
+            style = full.widget.style() if full.widget else view.style()
+            style.drawPrimitive(QStyle.PrimitiveElement.PE_PanelItemViewItem, full, painter, full.widget)
+            opt = QStyleOptionViewItem(option)
+            opt.rect = option.rect.adjusted(0, 0, -w, 0)           # the name ends before the size
+            super().paint(painter, opt, index)
+            painter.save()
+            painter.setFont(font)
+            c = QColor(option.palette.color(QPalette.ColorRole.Text))
+            c.setAlpha(150)
+            painter.setPen(c)
+            painter.drawText(option.rect.adjusted(0, 0, -8, 0), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, text)
+            painter.restore()
         from . import marks
         if marks.MARKS:
             k = marks.MARKS.get(os.path.normpath(index.model().filePath(index)).lower())
@@ -59,6 +99,7 @@ class _Column(QListView):
         self._anim.start()
 
     def scrollTo(self, index, hint=QAbstractItemView.ScrollHint.EnsureVisible):
+        """Glide so the current row keeps AHEAD rows visible above and below it."""
         if hint != QAbstractItemView.ScrollHint.EnsureVisible or not index.isValid():
             return super().scrollTo(index, hint)
         sb = self.verticalScrollBar()
@@ -84,6 +125,7 @@ class _Column(QListView):
         super().wheelEvent(ev)
 
     def keyPressEvent(self, ev):
+        """← / → / typing go to the owner; everything else is a normal list."""
         k, mods = ev.key(), ev.modifiers() & ~Qt.KeyboardModifier.KeypadModifier
         if not mods and k == Qt.Key.Key_Right:
             self.owner.go_in()
@@ -100,10 +142,13 @@ class _Column(QListView):
 
 
 class ColumnsView(QColumnView):
+    """Miller columns over QFileSystemModel, with Burrow's keys, scrolling and file actions."""
     folderChosen = Signal(str)        # a folder is now the deepest column: it's the tab's folder
     fileChosen = Signal(str)          # a file is selected: its folder is the tab's folder
     openRequested = Signal(list)      # Enter / double-click on files
     contextMenu = Signal(object)      # pos in viewport coordinates
+    show_sizes = False                # Settings: small sizes after the names (class defaults:
+    folder_sizes_on = True            # columns are created during setModel, before __init__ ends)
     extra_actions: tuple = ()         # the window's file actions (set per view); createColumn runs
                                       # during setModel, before __init__ finishes
 
@@ -141,9 +186,11 @@ class ColumnsView(QColumnView):
         self._nav_timer.timeout.connect(self._emit_current)
         self._pending_in = None                 # a folder → was pressed on while still loading
         self.fs.directoryLoaded.connect(self._dir_loaded)
+        self._sizes: dict[str, int] = {}        # folder path (normcase) -> size, from Everything
         self._search = ("", 0.0, None)          # typed text, when, the column searched
 
     def createColumn(self, index):
+        """Each column is a _Column wired to the window's menu, actions and icon size."""
         col = _Column(self, self.viewport())    # our own list: smooth scrolling and arrow keys
         self.initializeColumn(col)
         col.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
@@ -161,7 +208,48 @@ class ColumnsView(QColumnView):
         col.setViewportMargins(0, 0, 1, 0)       # 1px of window color between columns
         col.setIconSize(self.iconSize())
         col.addActions(self.extra_actions)
+        self._ask_folder_sizes(index)
         return col
+
+    # ----- sizes next to names -----------------------------------------------------------
+    def set_show_sizes(self, on: bool, folders: bool = True):
+        self.show_sizes, self.folder_sizes_on = on, folders
+        if on:
+            for col in self.findChildren(_Column):
+                self._ask_folder_sizes(col.rootIndex())
+        self.viewport().update()
+        for col in self.findChildren(_Column):
+            col.viewport().update()
+
+    def _ask_folder_sizes(self, parent: QModelIndex):
+        """Folder sizes for one column, from Everything (one quick query, answered in ms)."""
+        if not (self.show_sizes and self.folder_sizes_on):
+            return
+        from . import everything, places
+        folder = self.path_of(parent)
+        if not folder or places.is_remote(folder):
+            return
+        c = everything.client()
+        if c is None:
+            return
+
+        def got(sizes):
+            if sizes:
+                self._sizes.update(sizes)
+                for col in self.findChildren(_Column):
+                    if col.rootIndex() == parent:
+                        col.viewport().update()
+        c.folder_sizes(folder, got)
+
+    def size_for(self, index: QModelIndex):
+        """The size to show for a row: files from the file system, folders from Everything."""
+        if not index.isValid():
+            return None
+        if self.fs.isDir(index):
+            if not index.parent().isValid():                       # drives: no size here
+                return None
+            return self._sizes.get(os.path.normcase(os.path.normpath(self.fs.filePath(index))))
+        return self.fs.size(index)
 
     def set_icon_size(self, px: int, row_height: int):
         self._delegate.height = row_height

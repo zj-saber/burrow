@@ -40,6 +40,7 @@ if WIN:
 
 
 class WinEHook(QObject):
+    """Catches Win+E (opt-in) with a low-level keyboard hook that only ever looks at Win and E."""
     pressed = Signal()
 
     def __init__(self, parent=None):
@@ -101,6 +102,7 @@ RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 
 def set_start_with_windows(enable: bool, command: str) -> str | None:
+    """Add or remove Burrow from the HKCU Run key (start minimized to the tray)."""
     if not WIN:
         return "Only available on Windows."
     import winreg

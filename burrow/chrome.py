@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import QMimeData, QObject, QPoint, Qt, QTimer, Signal
+from PySide6.QtCore import QMimeData, QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QDrag, QMouseEvent
 from PySide6.QtWidgets import (QHBoxLayout, QLabel, QLineEdit, QMenu, QStackedWidget, QTabBar,
                                QToolButton, QWidget)
@@ -31,6 +31,7 @@ class SnapTabBar(QTabBar):
         super().mousePressEvent(ev)
 
     def mouseMoveEvent(self, ev):
+        """A tab pulled down out of the bar starts a drag that can snap it into a split."""
         if self._press and ev.buttons() & Qt.MouseButton.LeftButton:
             start, index = self._press
             if abs(ev.position().y() - start.y()) > 28:          # pulled out of the bar
@@ -80,6 +81,7 @@ class TabHost(QObject):
         b.tabMoved.connect(self._moved)
 
     def _close_button(self, w):
+        """The small × on each tab."""
         btn = QToolButton()
         btn.setObjectName("tabclose")
         btn.setAutoRaise(True)
@@ -164,6 +166,7 @@ class TabHost(QObject):
 
 
 def path_segments(path: str) -> list[tuple[str, str]]:
+    """Split a path into (label, path) breadcrumb pieces, including This PC / Network / servers."""
     if path.startswith("::tag:"):
         from .folderview import display_path
         return [(display_path(path), path)]
@@ -204,6 +207,7 @@ class CrumbButton(QToolButton):
 
 
 class Breadcrumb(QWidget):
+    """The clickable path in the address bar; long paths fold their start into a » menu."""
     navigate = Signal(str, bool)     # path, in new tab?
     editRequested = Signal()
 
@@ -225,6 +229,7 @@ class Breadcrumb(QWidget):
         self._path = None
 
     def set_path(self, path: str):
+        """Show a new path as buttons (reusing the ones it already has)."""
         if path == self._path:
             return
         self._path = path
@@ -235,8 +240,7 @@ class Breadcrumb(QWidget):
                     wdg.deleteLater()
         self._items.clear()
         while self.h.count() > 1:                      # keep the "…" button at index 0
-            item = self.h.takeAt(1)
-            del item
+            self.h.takeAt(1)
         for i, (label, p) in enumerate(path_segments(path)):
             sep = None
             if i:
@@ -255,6 +259,7 @@ class Breadcrumb(QWidget):
         QTimer.singleShot(0, self._fit)
 
     def _fit(self):
+        """Hide the leading crumbs that don't fit and offer them in the » menu."""
         if not self._items:
             return
         avail = self.width() - 12 - self.more.sizeHint().width()
@@ -293,6 +298,7 @@ class Breadcrumb(QWidget):
 
 
 class AddressBar(QLineEdit):
+    """The editable address (shown on click or Ctrl+L); Esc and losing focus go back to crumbs."""
     escaped = Signal()
     focusLost = Signal()
 

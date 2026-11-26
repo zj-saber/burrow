@@ -20,13 +20,23 @@ NS = {"c": "urn:oasis:names:tc:opendocument:xmlns:container", "opf": "http://www
       "dc": "http://purl.org/dc/elements/1.1/"}
 
 
+MAX_PART = 16 * 2**20          # a chapter, picture or stylesheet bigger than this isn't read
+
+
+def _read(z: zipfile.ZipFile, name: str) -> bytes:
+    """One file from the book, refusing oversized ones (a "zip bomb" can't eat the memory)."""
+    if z.getinfo(name).file_size > MAX_PART:
+        raise KeyError(name)
+    return z.read(name)
+
+
 def read_book(path: str) -> dict:
     """Metadata, cover image bytes and spine (chapter paths). Safe on a worker thread."""
     with zipfile.ZipFile(path) as z:
-        container = ET.fromstring(z.read("META-INF/container.xml"))
+        container = ET.fromstring(_read(z, "META-INF/container.xml"))
         rootfile = container.find(".//c:rootfile", NS).get("full-path")
         base = posixpath.dirname(rootfile)
-        opf = ET.fromstring(z.read(rootfile))
+        opf = ET.fromstring(_read(z, rootfile))
 
         def dc(tag):
             vals = [(el.text or "").strip() for el in opf.findall(f".//dc:{tag}", NS)]
@@ -48,11 +58,11 @@ def read_book(path: str) -> dict:
                 cover_id = meta.get("content")
         cover = None
         if cover_id in manifest and manifest[cover_id][1].startswith("image/"):
-            cover = z.read(manifest[cover_id][0])
+            cover = _read(z, manifest[cover_id][0])
         else:   # some books just name the file "cover"
             for href, mtype, _ in manifest.values():
                 if mtype.startswith("image/") and "cover" in href.lower():
-                    cover = z.read(href)
+                    cover = _read(z, href)
                     break
         spine = [manifest[r.get("idref")][0] for r in opf.findall(".//opf:spine/opf:itemref", NS)
                  if r.get("idref") in manifest]
@@ -75,7 +85,7 @@ class EpubBrowser(QTextBrowser):
     def show_chapter(self, book_path: str, chapter: str):
         self.path, self.current = book_path, chapter
         with zipfile.ZipFile(book_path) as z:
-            html = z.read(chapter).decode("utf-8", errors="replace")
+            html = _read(z, chapter).decode("utf-8", errors="replace")
         # QTextBrowser doesn't understand XML prologs/doctypes; drop them
         html = re.sub(r"<\?xml[^>]*\?>|<!DOCTYPE[^>]*>", "", html, flags=re.I)
         self.document().clear()
@@ -83,11 +93,12 @@ class EpubBrowser(QTextBrowser):
         self.verticalScrollBar().setValue(0)
 
     def loadResource(self, rtype, url: QUrl):
+        """Pictures and stylesheets come from inside the book only."""
         if self.path:
             target = posixpath.normpath(posixpath.join(posixpath.dirname(self.current), url.path()))
             try:
                 with zipfile.ZipFile(self.path) as z:
-                    data = z.read(target)
+                    data = _read(z, target)
                 if rtype == QTextDocument.ResourceType.ImageResource:
                     img = QImage.fromData(data)
                     if not img.isNull() and img.width() > 900:      # keep big illustrations readable
@@ -96,7 +107,7 @@ class EpubBrowser(QTextBrowser):
                 return QByteArray(data)
             except (KeyError, OSError, zipfile.BadZipFile):
                 pass
-        return super().loadResource(rtype, url)
+        return None          # never fall back to files on disk: a book only shows what's inside it
 
     def wheelEvent(self, ev):
         if ev.modifiers() & Qt.KeyboardModifier.ControlModifier:      # Ctrl+wheel: text size
@@ -146,7 +157,7 @@ class EpubReader(QWidget):
         try:
             with zipfile.ZipFile(self.book) as z:
                 for i, ch in enumerate(self.spine[:4]):
-                    text = re.sub(r"<[^>]+>", "", z.read(ch).decode("utf-8", "replace"))
+                    text = re.sub(r"<[^>]+>", "", _read(z, ch).decode("utf-8", "replace"))
                     if len(text.strip()) > 200:
                         return i
         except (OSError, KeyError, zipfile.BadZipFile):

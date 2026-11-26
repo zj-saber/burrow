@@ -33,6 +33,7 @@ CODE_COMMENTS = {"py": "#", "pyw": "#", "sh": "#", "bash": "#", "ps1": "#", "rb"
 
 
 class PreviewHighlighter(QSyntaxHighlighter):
+    """Light syntax colors for text previews (numbers, strings, comments, keys, tags)."""
     def __init__(self, doc, ext: str, colors: dict):
         super().__init__(doc)
         dim, accent = QColor(colors["dim"]), QColor(colors["accent"])
@@ -69,6 +70,7 @@ class PreviewHighlighter(QSyntaxHighlighter):
             self.setFormat(m.capturedStart(group), m.capturedLength(group), fmt)
 
     def highlightBlock(self, text: str):
+        """Color one line; very long files and lines are left plain to stay fast."""
         if self.currentBlock().blockNumber() > HIGHLIGHT_LINES or len(text) > 2000:
             return
         self._apply(self.number_re, text, self.f_number)

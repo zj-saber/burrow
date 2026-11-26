@@ -7,7 +7,7 @@ every file list through QStyleSheetStyle, which slows painting noticeably.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QGuiApplication, QIcon, QPainter, QPalette, QPixmap
 
 _BURROW = {
@@ -133,6 +133,7 @@ def resolve(mode: str) -> str:
 
 
 def _palette(c: dict) -> QPalette:
+    """The QPalette for a color set (this is all the file lists are styled with)."""
     p = QPalette()
     col = lambda k: QColor(c[k])  # noqa: E731
     for group in (QPalette.ColorGroup.Active, QPalette.ColorGroup.Inactive, QPalette.ColorGroup.Disabled):
@@ -161,6 +162,7 @@ def _palette(c: dict) -> QPalette:
 
 
 def apply(app, mode: str, palette: str = "burrow") -> dict:
+    """Apply light/dark and a color set to the whole app."""
     global _current, _default_font
     pal = PALETTES.get(palette, _BURROW)
     name = pal.get("only") or resolve(mode)
@@ -202,6 +204,7 @@ def _icon_family() -> str:
 
 
 def icon(name: str, size: int = 16) -> QIcon:
+    """A themed icon drawn from the Segoe icon font, cached per size and theme."""
     key = (name, size, _current["name"], _current.get("palette"))
     ic = _icon_cache.get(key)
     if ic is not None:
@@ -230,6 +233,7 @@ def icon(name: str, size: int = 16) -> QIcon:
 
 # ----- style sheets for small chrome widgets only ---------------------------------
 def tabstrip_qss(c):
+    """Style for the tab strip."""
     return f"""
 #tabstrip {{ background: {c['window']}; }}
 QTabBar {{ background: transparent; }}
@@ -250,6 +254,7 @@ QTabBar QToolButton#tabclose:hover {{ background: {c['border']}; }}
 
 
 def navbar_qss(c):
+    """Style for the navigation bar and address field."""
     return f"""
 #navbar {{ background: {c['base']}; border-bottom: 1px solid {c['border']}; }}
 #navbar QToolButton {{ border: none; border-radius: 6px; padding: 5px; background: transparent; color: {c['text']}; }}
@@ -304,6 +309,7 @@ QLineEdit:focus {{ border: 1px solid {c['accent']}; }}
 
 
 def statusbar_qss(c):
+    """Style for the status bar and its switches."""
     return f"""
 QStatusBar {{ background: {c['window']}; border-top: 1px solid {c['border']}; }}
 QStatusBar::item {{ border: none; }}
@@ -323,6 +329,7 @@ QSlider#iconSlider::handle:horizontal {{ width: 11px; height: 11px; margin: -4px
 
 
 def inspector_qss(c):
+    """Style for the inspector panel."""
     return f"""
 #inspector {{ background: {c['panel']}; }}
 #inspector QLabel {{ background: transparent; }}

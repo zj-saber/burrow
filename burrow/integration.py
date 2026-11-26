@@ -64,6 +64,7 @@ def _set_value(path: str, name: str, value: str):
 
 
 def _delete_tree(path: str):
+    """Delete a registry key under HKCU with everything below it."""
     winreg = _reg()
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path, 0, winreg.KEY_ALL_ACCESS) as k:
@@ -182,6 +183,10 @@ def send_to_running(args: list[str]) -> bool:
     return True
 
 
+MAX_MESSAGE = 256 * 1024        # a launch hands over a few paths, never more than this
+MAX_PATHS = 64
+
+
 class InstanceServer(QObject):
     """Receives paths from later launches."""
     received = Signal(list)
@@ -196,12 +201,16 @@ class InstanceServer(QObject):
         self.server.newConnection.connect(self._accept)
 
     def _accept(self):
+        """Read a later launch's paths (JSON list, size-capped) and pass them on."""
         while self.server.hasPendingConnections():
             sock = self.server.nextPendingConnection()
             buf = bytearray()
 
             def read(sock=sock, buf=buf):
                 buf.extend(bytes(sock.readAll().data()))
+                if len(buf) > MAX_MESSAGE:                  # paths only: anything bigger is junk
+                    buf.clear()
+                    sock.abort()
 
             def done(sock=sock, buf=buf):
                 read()
@@ -209,7 +218,8 @@ class InstanceServer(QObject):
                     args = json.loads(bytes(buf).decode("utf-8") or "[]")
                 except ValueError:
                     args = []
-                self.received.emit([a for a in args if isinstance(a, str)])
+                if isinstance(args, list):
+                    self.received.emit([a for a in args if isinstance(a, str)][:MAX_PATHS])
                 sock.deleteLater()
             sock.readyRead.connect(read)
             sock.disconnected.connect(done)

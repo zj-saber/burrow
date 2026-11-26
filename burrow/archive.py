@@ -42,6 +42,7 @@ def _result(kind, tool):
 
 
 def _add(res, name, size, is_dir, mtime):
+    """Count one archive entry and keep it for display (up to LIMIT entries)."""
     name = name.replace("\\", "/").rstrip("/")
     if not name:
         return
@@ -57,6 +58,7 @@ def _add(res, name, size, is_dir, mtime):
 
 
 def _list_zip(path):
+    """List a .zip with Python's zipfile (no extraction)."""
     res = _result("ZIP archive", "built-in")
     with zipfile.ZipFile(path) as z:
         packed = 0
@@ -76,6 +78,7 @@ def _list_zip(path):
 
 def _list_7z(path, exe):
     # -slt: one "Key = value" block per item; -p...: never wait for a password
+    """List any archive 7-Zip understands, from its machine-readable output."""
     cmd = [exe, "l", "-slt", "-sccUTF-8", "-pBURROW_NO_PASSWORD", "--", path]
     proc = subprocess.run(cmd, capture_output=True, timeout=30, stdin=subprocess.DEVNULL,
                           creationflags=NO_WINDOW)
@@ -92,6 +95,7 @@ def _list_7z(path, exe):
     item = {}
 
     def flush():
+        """One finished 'Key = value' block from 7-Zip becomes one entry."""
         if "Path" in item:
             size = int(item.get("Size") or 0) if (item.get("Size") or "").isdigit() else 0
             is_dir = item.get("Folder") == "+" or "D" in item.get("Attributes", "")[:1]
@@ -125,6 +129,7 @@ _tar_line = re.compile(r"^(\S{10})\s+\S+\s+\S+\s+\S+\s+(\d+)\s+(\w{3}\s+\d+\s+[\
 
 
 def _list_tar(path):
+    """List an archive with Windows' tar.exe when 7-Zip isn't installed."""
     tar = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "tar.exe")
     proc = subprocess.run([tar, "-tvf", path], capture_output=True, timeout=30,
                           stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
@@ -140,6 +145,7 @@ def _list_tar(path):
 
 
 def list_archive(path: str) -> dict:
+    """What's inside an archive, for the inspector. Runs on a worker thread."""
     ext = os.path.splitext(path)[1][1:].lower()
     try:
         if ext in ZIP_EXTS:

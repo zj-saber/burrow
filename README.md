@@ -44,9 +44,32 @@ A tabbed file manager for Windows, written in Python with Qt (PySide6).
 - **Windows integration** (Settings ▸ Integrations, or Tools): *Open folders in Burrow* (desktop, Explorer, Run, shortcuts open as tabs) and *Open Burrow with Win+E* are separate switches, both off until you turn them on. Win+E works while Burrow runs; *Keep Burrow running in the background* adds a tray icon and starts it with Windows so Win+E always works. *Mirror bookmarks to Explorer Quick Access* pins/unpins bookmarked folders in Explorer. Folder colors are applied with Windows' own folder-settings call, so Explorer shows them immediately.
 - **Every feature has a switch** in Settings (General · Preview · Sidebar & list · Integrations): each preview type, syntax colors, arrow-key seeking, tags, Explorer folder icons, each sidebar section, single-window mode and more.
 - **Folder sizes from Everything (voidtools)**: when Everything is running, folder sizes fill the Size column a few milliseconds after a folder opens. You can sort by them, and they show in the inspector and status bar. Burrow talks to Everything's built-in IPC directly, so no SDK DLL is needed. Turn on *Index folder size* in Everything (*Tools ▸ Options ▸ Indexes*). You can switch it off in Settings.
+- **Sizes in columns view**: a small size after each name: MB, or GB / TB for big items. Folder sizes come from Everything (switch in Settings ▸ Sidebar & list).
+- **Safe like Explorer**: opening files goes through Windows' own checks (SmartScreen and the "downloaded from the internet" warning), extracted files keep that mark, names Windows reserves (CON, NUL, COM1…) are refused, deleting goes to the Recycle Bin, and updates are installed only from this repository's releases after their SHA-256 matches the one GitHub publishes.
 - **Light on resources**: in the tray Burrow gives its memory back to Windows (about 1 MB resident, 56 MB committed) and uses no CPU. Drives are noticed through Windows' device notifications instead of polling, the photo/PDF viewer and EPUB reader load on first use, and the install leaves out Qt parts it never loads (86 MB).
 - **Never freezes on the network**: network folders, share lists, free space and reconnecting a remembered drive all happen in the background, so a slow or offline server shows "Loading…" or an error instead of hanging the window. A folder that can't be reached is retried by itself (2, 4, 8… up to 30 s) and appears as soon as the server answers, and an open network folder is kept connected so Windows doesn't drop it after 10 idle minutes (switch in Settings).
 - **Light and dark themes** in two color sets: Burrow (cool blue) and **Primary**, a warm palette inspired by the Obsidian theme of the same name. Pick them in *Settings ▸ Colors*. They follow Windows light/dark by default, browser-style tabs, a clickable breadcrumb path, and the menus behind the ☰ button.
+
+## Works with
+
+Burrow finds these on its own when they're installed, and works without any of them. Nothing is bundled; each one is used only for what's listed.
+
+| App | What Burrow uses it for | License |
+|---|---|---|
+| [Everything](https://www.voidtools.com/) (voidtools) | Folder sizes in the list, columns view, inspector and status bar, read from its index in milliseconds | Freeware |
+| [TeraCopy](https://www.codesector.com/teracopy) | Copy and move (paste, drag and drop, Copy to / Move to) | Freeware, Pro is paid |
+| [NanaZip](https://github.com/M2Team/NanaZip) | Extract here / Extract to folder / Add to archive, and archive contents in the inspector | Open source (MIT) |
+| [7-Zip](https://www.7-zip.org/) | The same as NanaZip, when 7-Zip is the one installed | Open source (LGPL) |
+| [WinRAR](https://www.win-rar.com/) | Extract and add to archive, when neither NanaZip nor 7-Zip is installed | Shareware |
+| tar ([libarchive](https://github.com/libarchive/libarchive)), built into Windows | Archive contents and extracting when no archiver is installed | Open source (BSD) |
+| [Windows Terminal](https://github.com/microsoft/terminal) | Open terminal here | Open source (MIT) |
+| [PowerShell](https://github.com/PowerShell/PowerShell) | Open terminal here, when Windows Terminal isn't installed | Open source (MIT) |
+| OneDrive, iCloud, Dropbox, Google Drive, Box… | Shown in the sidebar and This PC, with their own icons (found through Windows' sync-root registry) | Their own |
+| Windows image codecs (HEIF, AVIF, JPEG XL, RAW Image Extension) | Previews of photos Qt can't read by itself | Microsoft Store, free |
+| [Blackmagic RAW Player](https://www.blackmagicdesign.com/products/blackmagicraw) | Opening .braw clips (Burrow shows their details) | Free |
+| FolderPainter-style folder colors | Folder colors are written to `desktop.ini` the same way, so both tools and Explorer show them | — |
+| Explorer Quick Access | Bookmarks can be mirrored there (pinned and unpinned with them) | Part of Windows |
+| [GitHub Releases](https://github.com/zj-saber/burrow/releases) | Updates, checked against the SHA-256 that GitHub publishes for each download | — |
 
 ## Install (Windows .exe)
 

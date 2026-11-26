@@ -16,7 +16,7 @@ from PySide6.QtGui import QImage, QImageReader, QKeySequence, QPainter, QPixmap,
 from PySide6.QtWidgets import (QDialog, QFrame, QGraphicsPixmapItem, QGraphicsScene, QGraphicsView,
                                QHBoxLayout, QLabel, QToolButton, QVBoxLayout, QWidget)
 
-from . import places, theme
+from . import places
 
 PREVIEW_MAX = 1600          # side length of the quick preview image
 FULL_MAX = 12000            # cap for the full-resolution image (memory)
@@ -24,6 +24,7 @@ MIN_ZOOM, MAX_ZOOM = 0.05, 16.0
 
 
 class _View(QGraphicsView):
+    """The graphics view under the zoomable preview: wheel/pinch zoom, pan, page keys."""
     zoomRequested = Signal(float, object)     # factor, anchor (scene pos) or None
     pageRequested = Signal(int)               # +1 / -1
     fitToggled = Signal()
@@ -187,6 +188,7 @@ class ZoomView(QWidget):
         QTimer.singleShot(0, self.fit)
 
     def load_pdf(self, path: str) -> dict:
+        """Open a PDF on its first page."""
         self.clear()
         from PySide6.QtPdf import QPdfDocument
         if self._pdf is None:
@@ -263,6 +265,7 @@ class ZoomView(QWidget):
         self.set_zoom(self.zoom * factor, anchor)
 
     def _apply_zoom(self, z: float, anchor=None):
+        """Set the zoom, keeping the point under the mouse in place."""
         z = max(MIN_ZOOM, min(MAX_ZOOM, z))
         self.zoom = z
         before = self.view.mapFromScene(anchor) if anchor is not None else None
@@ -290,6 +293,7 @@ class ZoomView(QWidget):
         self._sync_controls()
 
     def _load_full(self):
+        """Replace the quick preview with the full-resolution image (read on a worker thread)."""
         self._full_loaded = True
         path = self.path
 
@@ -313,6 +317,7 @@ class ZoomView(QWidget):
         places.run_async(read, done)
 
     def _render_pdf(self):
+        """Render the current PDF page sharp for the current zoom and screen."""
         if self.kind != "pdf" or self._pdf is None:
             return
         dpr = self.devicePixelRatioF()
@@ -343,6 +348,7 @@ class ZoomView(QWidget):
 
     # ----- pages ---------------------------------------------------------------------------
     def go_page(self, n: int, from_edge: int = 0):
+        """Show another PDF page (from_edge: start at its top or bottom)."""
         if self.kind != "pdf" or self._pdf is None:
             return
         n = max(0, min(self._pdf.pageCount() - 1, n))

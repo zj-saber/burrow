@@ -51,6 +51,7 @@ class _SidebarDelegate(QStyledItemDelegate):
         return s
 
     def paint(self, painter, option, index):
+        """Rounded hover/selection fill, the row itself, then its eject mark."""
         opt = QStyleOptionViewItem(option)
         self.initStyleOption(opt, index)
         selected = bool(opt.state & QStyle.StateFlag.State_Selected)
@@ -95,6 +96,7 @@ class _SidebarDelegate(QStyledItemDelegate):
 
 
 class Sidebar(QTreeWidget):
+    """The left panel: bookmarks, places, cloud, tags, drives and network; accepts drops."""
     openRequested = Signal(str, bool)          # path, in new tab?
     dropRequested = Signal(list, str, bool)    # sources, target, move?
     mapDriveRequested = Signal()
@@ -153,6 +155,7 @@ class Sidebar(QTreeWidget):
         self.rebuild()
 
     def _section(self, title, path=None, icon=None, key=None):
+        """A section heading (plain, or a link like This PC and Network)."""
         it = QTreeWidgetItem(self, [title if path else title.upper()])
         f = it.font(0)
         if path:
@@ -184,6 +187,7 @@ class Sidebar(QTreeWidget):
         return ([(d.path, d.name, d.note) for d in list_drives()], list(places.RECENT_SERVERS))
 
     def rebuild(self):
+        """Fill every section from scratch (cheap: a few dozen rows, no network I/O)."""
         icons = icon_cache()
         self.clear()
         self._building = True
@@ -317,6 +321,7 @@ class Sidebar(QTreeWidget):
             self.rebuild()
 
     def highlight(self, path):
+        """Select the entry for the folder the active tab shows."""
         self._current = path
         target = None
         if path:
@@ -381,6 +386,7 @@ class Sidebar(QTreeWidget):
         return it if pos.x() >= r.right() - EJECT_W - 2 else None
 
     def mousePressEvent(self, ev):
+        """Eject buttons, heading chevrons, heading drags and middle-click to a new tab."""
         self._press = None
         if ev.button() == Qt.MouseButton.LeftButton:
             it = self.itemAt(ev.position().toPoint())
@@ -419,6 +425,7 @@ class Sidebar(QTreeWidget):
         self.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def keyPressEvent(self, ev):
+        """↑/↓ browse, ← / → fold or go back to the list, Enter opens."""
         it = self.currentItem()
         key = ev.key()
         if ev.modifiers() & ~Qt.KeyboardModifier.KeypadModifier:
@@ -460,6 +467,7 @@ class Sidebar(QTreeWidget):
             self.browseRequested.emit(it.data(0, PATH_ROLE))
 
     def mouseMoveEvent(self, ev):
+        """Drag a heading to reorder sections; track the eject button under the mouse."""
         if self._press and ev.buttons() & Qt.MouseButton.LeftButton and \
                 (ev.position().toPoint() - self._press[0]).manhattanLength() >= QApplication.startDragDistance():
             key = self._press[1]
@@ -510,6 +518,7 @@ class Sidebar(QTreeWidget):
             p.end()
 
     def _menu(self, pos):
+        """Right-click: open, bookmark, eject, map / disconnect network drives."""
         it = self.itemAt(pos)
         if it is not None and it.parent() is None and it.data(0, SECTION_ROLE) and not it.data(0, PATH_ROLE):
             m = QMenu(self)
@@ -573,6 +582,7 @@ class Sidebar(QTreeWidget):
         return [os.path.normpath(u.toLocalFile()) for u in md.urls() if u.isLocalFile()]
 
     def _drop_info(self, ev):
+        """What a drop at this point would do: copy/move to a place, or add bookmarks."""
         paths = self._paths(ev.mimeData())
         it = self.itemAt(ev.position().toPoint())
         if not paths or not it:
@@ -601,6 +611,7 @@ class Sidebar(QTreeWidget):
         super().dragLeaveEvent(ev)
 
     def dragMoveEvent(self, ev):
+        """Highlight the drop target (or the reorder line for a heading)."""
         if ev.mimeData().hasFormat(SECTION_MIME):
             _before, y = self._drop_slot(int(ev.position().y()))
             if y != self._drop_y:
@@ -621,6 +632,7 @@ class Sidebar(QTreeWidget):
         ev.accept()
 
     def dropEvent(self, ev):
+        """Finish a drop: transfer files, add bookmarks or move a section."""
         if ev.mimeData().hasFormat(SECTION_MIME):
             key = bytes(ev.mimeData().data(SECTION_MIME)).decode()
             before, _y = self._drop_slot(int(ev.position().y()))

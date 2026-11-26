@@ -114,6 +114,7 @@ def _device_number(path: str):
 
 
 def _devinst_for(number, guid) -> int | None:
+    """Find the Windows device node of the disk with this device number."""
     sa = ctypes.WinDLL("setupapi", use_last_error=True)
     sa.SetupDiGetClassDevsW.restype = wintypes.HANDLE
     sa.SetupDiGetClassDevsW.argtypes = [ctypes.POINTER(_GUID), wintypes.LPCWSTR, wintypes.HWND, wintypes.DWORD]

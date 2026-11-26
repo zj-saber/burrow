@@ -34,6 +34,7 @@ def add_preset_actions(menu: QMenu, config: Config, parent):
 
 
 def save_preset_dialog(parent, config: Config):
+    """Ask for a name and save the current layout as a view preset."""
     cols = ", ".join(COLUMN_TITLES[c] for c in config.view["columns"])
     suggested = config.get("active_preset") if config.is_user_preset(config.get("active_preset")) else ""
     name, ok = QInputDialog.getText(
@@ -52,6 +53,7 @@ def save_preset_dialog(parent, config: Config):
 
 
 class ManagePresetsDialog(QDialog):
+    """Rename and delete saved view presets."""
     def __init__(self, config: Config, parent=None):
         super().__init__(parent)
         self.config = config
@@ -249,6 +251,8 @@ class SettingsDialog(QDialog):
             self.view_mode.addItem(label, data)
         self.view_mode.setCurrentIndex(max(self.view_mode.findData(config.get("view_mode")), 0))
         f.addRow("New tabs open as:", self.view_mode)
+        f.addRow(check("columns_sizes", "Columns view: small sizes after the names (folders from Everything)",
+                       "MB, or GB / TB for big items. Folder sizes need Everything running."))
         f.addRow(check("ctrl_wheel_icon_size", "Ctrl+mouse wheel changes the icon size"))
         f.addRow(check("drive_usage_bars", "This PC shows how full each drive is"))
         f.addRow(check("network_keepalive", "Keep network drives connected while one is open",
@@ -387,6 +391,7 @@ class SettingsDialog(QDialog):
             self.new_tab.setText(os.path.normpath(p))
 
     def _save(self):
+        """Store every field, then let the window apply what changed."""
         from . import integration
         for box, was, fn, label in ((self.default_fm, self._default_was, integration.set_default, "Open folders in Burrow"),):
             if box.isChecked() != was:

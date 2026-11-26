@@ -159,7 +159,7 @@ def open_with_dialog(path: str):
 
 def show_in_explorer(path: str, select: bool):
     if select:
-        subprocess.Popen(f'explorer.exe /select,"{path}"')
+        subprocess.Popen(["explorer.exe", "/select,", os.path.normpath(path)])
     else:
         subprocess.Popen(["explorer.exe", path])
 
@@ -175,6 +175,7 @@ def open_terminal(path: str):
 
 # ----- TeraCopy ---------------------------------------------------------------
 def find_teracopy(configured: str = "") -> str:
+    """TeraCopy.exe from the setting, the usual install folders, or the registry."""
     if configured and os.path.isfile(configured):
         return configured
     if WIN:
@@ -262,6 +263,7 @@ class CopyJob(QObject):
         self._cancel = True
 
     def run(self):
+        """Copy/move every step of the plan, collecting errors instead of stopping."""
         try:
             self.total = sum(self._size(s) for s, d, _ in self.plan
                              if not (self.move and same_volume(s, d)))
@@ -277,6 +279,7 @@ class CopyJob(QObject):
             self.done.emit(self.errors, self._cancel)
 
     def _size(self, path: str) -> int:
+        """Bytes to copy for one source (a whole folder tree), for the progress bar."""
         try:
             if not os.path.isdir(path) or _is_link(path):
                 return os.path.getsize(path)
@@ -299,6 +302,7 @@ class CopyJob(QObject):
             self.progress.emit(self.copied, self.total, name)
 
     def _do(self, src: str, dst: str, mode: str):
+        """One step: a fast rename on the same drive, else copy (and delete the source for a move)."""
         src_is_dir = os.path.isdir(src) and not _is_link(src)
         if self.move and same_volume(src, dst):
             if mode == "overwrite" and os.path.lexists(dst):
@@ -344,6 +348,7 @@ class CopyJob(QObject):
             pass
 
     def _copy_tree(self, src: str, dst: str):
+        """Copy a folder recursively; links and junctions are skipped, not followed."""
         os.makedirs(dst, exist_ok=True)
         with os.scandir(src) as it:
             items = list(it)
@@ -368,6 +373,7 @@ class CopyJob(QObject):
             pass
 
     def _copy_file(self, src: str, dst: str):
+        """Copy one file in chunks so it can be cancelled; a cancelled copy leaves no half file."""
         name = os.path.basename(src)
         if os.path.exists(dst) and not os.access(dst, os.W_OK):
             os.chmod(dst, stat.S_IWRITE)

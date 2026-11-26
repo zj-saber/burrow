@@ -76,6 +76,7 @@ def _list(folder: str, errors: list) -> dict:
 
 
 def _tree_size(path: str, patterns, worker) -> tuple[int, int]:
+    """Total size and file count of a folder that exists on one side only."""
     size = count = 0
     for root, dirs, files in os.walk(path):
         if worker is not None and worker.cancelled:
@@ -106,6 +107,7 @@ def compare(left: str, right: str, patterns: list[str], content: bool, worker=No
             worker.progress.emit(f"Comparing… {scanned[0]:,} folders · {rel or os.path.basename(left)}")
 
     def walk(rel):
+        """Compare one folder level on both sides and recurse into folders present on both."""
         if worker is not None and worker.cancelled:
             return
         report(rel)
@@ -161,6 +163,7 @@ COLS = ["Name", "Size", "Modified", "", "Size", "Modified"]
 
 
 class RowsModel(QAbstractTableModel):
+    """The comparison table: one row per difference, with sizes, dates and the action."""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.rows: list[Row] = []
@@ -197,6 +200,7 @@ class RowsModel(QAbstractTableModel):
         return time.strftime("%Y-%m-%d %H:%M", time.localtime(info[1])) if info else ""
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        """Cell text, colors (newer side, action) and sort keys."""
         if not index.isValid():
             return None
         r = self.rows[index.row()]
@@ -252,6 +256,7 @@ class RowsProxy(QSortFilterProxyModel):
 
 # ----- window ------------------------------------------------------------------------
 class CompareWindow(QWidget):
+    """Compare & sync: pick two folders, compare, adjust actions, synchronize."""
     _open: list = []
 
     @classmethod
@@ -423,6 +428,7 @@ class CompareWindow(QWidget):
             self.summary.setText(text)
 
     def run_compare(self):
+        """Start comparing on a worker thread (or stop a running comparison)."""
         if self.worker is not None:
             self.worker.cancel()
             return
@@ -446,6 +452,7 @@ class CompareWindow(QWidget):
         self.worker.start()
 
     def _compared(self, res):
+        """Results arrived: apply the sync direction and show them."""
         pair = self._pair
         cancelled = self.worker.cancelled
         self.worker = None
@@ -489,6 +496,7 @@ class CompareWindow(QWidget):
         return copy_r, copy_l, dels
 
     def _summarize(self):
+        """The line at the bottom: what will be copied and deleted, and how much."""
         copy_r, copy_l, dels = self._plan()
         same = sum(1 for r in self.rows if r.status == EQUAL)
         size = sum((r.l or (0,))[0] for r in copy_r) + sum((r.r or (0,))[0] for r in copy_l)
@@ -534,6 +542,7 @@ class CompareWindow(QWidget):
         self._set_action([r], choices[(choices.index(r.action) + 1) % len(choices)] if r.action in choices else SKIP)
 
     def _menu(self, pos):
+        """Right-click on rows: change their action or show them in Burrow."""
         rows = self._selected_rows()
         if not rows:
             return
@@ -568,6 +577,7 @@ class CompareWindow(QWidget):
 
     # ----- synchronize ----------------------------------------------------------------
     def run_sync(self):
+        """Confirm, then copy with the built-in copier; deletions run after the copies."""
         if not self.compared or self.job is not None:
             return
         left, right = self.compared
@@ -613,6 +623,7 @@ class CompareWindow(QWidget):
 
     @Slot(list, bool)
     def _synced(self, errors, cancelled):
+        """Copies done: delete (Recycle Bin by default), report errors, compare again."""
         self.job_thread.quit()
         self.job_thread.wait(3000)
         self.job = None
@@ -632,6 +643,7 @@ class CompareWindow(QWidget):
         self.run_compare()                         # show what's left (ideally nothing)
 
     def closeEvent(self, ev):
+        """Closing stops a running comparison or sync (asking first for a sync)."""
         if self.job is not None:
             if QMessageBox.question(self, "Synchronize", "Stop synchronizing and close?") \
                     != QMessageBox.StandardButton.Yes:

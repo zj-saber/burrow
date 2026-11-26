@@ -8,7 +8,7 @@ import sys
 from datetime import datetime
 
 from PySide6.QtCore import (QAbstractTableModel, QFileInfo, QMimeData, QModelIndex,
-                            QSortFilterProxyModel, QStorageInfo, Qt, QUrl, Signal)
+                            QSortFilterProxyModel, Qt, QUrl, Signal)
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QFileIconProvider
 
@@ -31,6 +31,21 @@ ATTR_RECALL_ON_DATA_ACCESS = 0x400000
 CLOUD_ONLY = ATTR_OFFLINE | ATTR_RECALL_ON_OPEN | ATTR_RECALL_ON_DATA_ACCESS
 
 INVALID_NAME_CHARS = set('\\/:*?"<>|')
+RESERVED_NAMES = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+
+
+def name_problem(name: str) -> str | None:
+    """Why Windows (and Explorer) won't accept this file or folder name, or None if it's fine."""
+    if not name or name in (".", ".."):
+        return "A name can't be empty."
+    if any(c in INVALID_NAME_CHARS or ord(c) < 32 for c in name):
+        return 'A name can\'t contain any of these characters: \\ / : * ? " < > |'
+    if name.split(".")[0].rstrip(" ").upper() in RESERVED_NAMES:
+        return f'"{name}" is reserved by Windows (CON, PRN, AUX, NUL, COM1-9, LPT1-9).'
+    if len(name) > 255:
+        return "A name can't be longer than 255 characters."
+    return None
+
 
 _num_re = re.compile(r"(\d+)")
 
@@ -63,6 +78,7 @@ def attr_string(attrs: int) -> str:
 
 
 class Entry:
+    """One row: a file, folder, drive, share or server, with the facts the columns show."""
     __slots__ = ("name", "path", "is_dir", "size", "mtime", "ctime", "atime", "attrs",
                  "hidden", "is_drive", "note", "nkey", "ext", "kind", "free", "ejectable")
 
@@ -115,6 +131,7 @@ else:
 
 
 class IconCache:
+    """Icons by type, cached; never asks the shell about a network path (it could block)."""
     PER_FILE = {"exe", "lnk", "ico", "url", "msi", "cpl", "scr", "appref-ms", "cur", "ani"}
 
     def __init__(self):
@@ -143,6 +160,7 @@ class IconCache:
         return ic
 
     def icon(self, e: Entry):
+        """The icon for a row (per file for .exe/.lnk/.ico, otherwise per type)."""
         if e.kind in ("network", "server", "share"):
             return self.network            # never ask the shell about a network path: it may block
         if e.is_drive and e.kind == "cloud":
@@ -256,6 +274,7 @@ def icon_cache() -> IconCache:
 
 # ----- listing ----------------------------------------------------------------
 def scan_dir(path: str, show_hidden: bool) -> list[Entry]:
+    """List a folder (os.scandir plus attributes). Safe on a worker thread."""
     out = []
     with os.scandir(path) as it:
         for de in it:
@@ -279,6 +298,7 @@ def scan_dir(path: str, show_hidden: bool) -> list[Entry]:
 
 
 def drive_entry(info: dict) -> Entry:
+    """A This PC row for a drive, with its free space or network status."""
     name = places.drive_display_name(info)
     kind = info["kind"]
     if kind == "network":
@@ -317,6 +337,7 @@ def list_shares(server: str) -> list[Entry]:
 
 
 class DirModel(QAbstractTableModel):
+    """The table behind a file list: entries, sorting (natural, folders first) and renaming."""
     renameFailed = Signal(str)
 
     def __init__(self, parent=None):
@@ -394,6 +415,7 @@ class DirModel(QAbstractTableModel):
             self.sort(self.sort_column, order)
 
     def _key(self, col: str):
+        """Sort key for a column; names compare naturally (file2 before file10)."""
         if col == "size":
             return lambda e: (e.size if e.size is not None else -1, e.nkey)
         if col == "type":
@@ -456,6 +478,7 @@ class DirModel(QAbstractTableModel):
         return s
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        """What each cell shows: text, icon, alignment, tooltip and color."""
         if not index.isValid():
             return None
         e = self.entries[index.row()]
@@ -506,14 +529,16 @@ class DirModel(QAbstractTableModel):
         return f
 
     def setData(self, index, value, role=Qt.ItemDataRole.EditRole):
+        """Inline rename, refusing names Windows won't accept or that already exist."""
         if role != Qt.ItemDataRole.EditRole or not index.isValid() or index.column() != 0:
             return False
         e = self.entries[index.row()]
         new = str(value).strip().rstrip(".")
         if not new or new == e.name:
             return False
-        if any(c in INVALID_NAME_CHARS for c in new):
-            self.renameFailed.emit('A name can\'t contain any of these characters: \\ / : * ? " < > |')
+        problem = name_problem(new)
+        if problem:
+            self.renameFailed.emit(problem)
             return False
         new_path = os.path.join(os.path.dirname(e.path), new)
         if os.path.lexists(new_path) and os.path.normcase(new_path) != os.path.normcase(e.path):

@@ -97,6 +97,7 @@ class EverythingClient(QWidget):
         self.last_error = ""
 
     def nativeEvent(self, event_type, message):
+        """Everything answers by WM_COPYDATA: hand each reply to the query that asked."""
         if WIN and event_type == b"windows_generic_MSG":
             msg = wintypes.MSG.from_address(int(message))
             if msg.message == WM_COPYDATA and msg.lParam:

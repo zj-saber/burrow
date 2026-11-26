@@ -27,6 +27,7 @@ PATH_ROLE = Qt.ItemDataRole.UserRole
 
 
 def _hash(path: str, limit: int | None, worker=None) -> bytes | None:
+    """BLAKE2 hash of a file, or of its first `limit` bytes."""
     h = hashlib.blake2b(digest_size=16)
     try:
         with open(path, "rb") as f:
@@ -111,6 +112,7 @@ def find_duplicates(folders: list[str], min_size: int, patterns: list[str], work
 
 
 class DuplicatesWindow(QWidget):
+    """Find duplicates: search, review the groups, recycle the extra copies."""
     _open: list = []
 
     @classmethod
@@ -198,6 +200,7 @@ class DuplicatesWindow(QWidget):
         return [os.path.normpath(p.strip().strip('"')) for p in self.folders.edit.text().split(";") if p.strip()]
 
     def run(self):
+        """Start the search on a worker thread (or stop it)."""
         if self.worker is not None:
             self.worker.cancel()
             return
@@ -218,6 +221,7 @@ class DuplicatesWindow(QWidget):
         self.worker.start()
 
     def _found(self, res):
+        """Show the groups, biggest saving first, and tick by the chosen rule."""
         cancelled = self.worker.cancelled
         self.worker = None
         self.find_btn.setText("Find")
@@ -251,6 +255,7 @@ class DuplicatesWindow(QWidget):
         self._apply_rule()
 
     def _apply_rule(self, *_):
+        """Tick every copy but the one the rule keeps (oldest, newest or shortest path)."""
         rule = self.rule.currentIndex()
         self.tree.blockSignals(True)
         for i in range(self.tree.topLevelItemCount()):
@@ -289,6 +294,7 @@ class DuplicatesWindow(QWidget):
         self.del_btn.setEnabled(bool(ticked))
 
     def delete_ticked(self):
+        """Recycle the ticked copies, never the last copy of a file."""
         ticked, all_ticked = self._ticked()
         if all_ticked:
             QMessageBox.warning(self, "Find duplicates", f"In {all_ticked} group(s) every copy is ticked. "

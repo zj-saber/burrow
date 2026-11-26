@@ -27,6 +27,7 @@ class _WNDCLASSW(ctypes.Structure):
 
 
 class DeviceWatcher(QObject):
+    """Tells Burrow when a drive appears or goes away, without polling."""
     changed = Signal()            # debounced: drives may still be mounting when the first message comes
 
     def __init__(self, parent=None):
@@ -48,6 +49,7 @@ class DeviceWatcher(QObject):
         self._late.start()
 
     def _create(self):
+        """Register the hidden window that receives WM_DEVICECHANGE."""
         u32 = ctypes.windll.user32
         u32.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
         u32.DefWindowProcW.restype = LRESULT

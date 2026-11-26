@@ -87,8 +87,9 @@ def extract(archives: list[str], to_folder: bool, run_hidden) -> str | None:
     parent = os.path.dirname(archives[0])
     if kind == "7z":
         out = os.path.join(parent, "*") if to_folder else parent       # 7-Zip: * = the archive's name
-        # -an -ai!: several archives in one go (a 2nd plain name would be read as a filter)
-        _start([exe, "x", "-an", *[f"-ai!{os.path.basename(x)}" for x in archives], f"-o{out}"], parent)
+        # -an -ai!: several archives in one go (a 2nd plain name would be read as a filter);
+        # -snz: extracted files inherit the archive's "downloaded from the internet" mark, like Explorer
+        _start([exe, "x", "-an", *[f"-ai!{os.path.basename(x)}" for x in archives], "-snz", f"-o{out}"], parent)
     elif kind == "winrar":
         for a in archives:
             dest = os.path.join(parent, folder_name(a)) if to_folder else parent
@@ -103,9 +104,32 @@ def extract(archives: list[str], to_folder: bool, run_hidden) -> str | None:
                                    creationflags=NO_WINDOW, stdin=subprocess.DEVNULL)
                 if r.returncode:
                     errors.append(f"{os.path.basename(a)}: {(r.stderr or '').strip()[:200]}")
+                else:
+                    _propagate_zone(a, dest, exe)
             return errors
         run_hidden(job)
     return None
+
+
+def _propagate_zone(archive: str, dest: str, tar: str):
+    """tar.exe doesn't copy the Mark-of-the-Web: give each extracted file the archive's
+    Zone.Identifier, so Windows still warns before running something that came from the internet."""
+    try:
+        with open(archive + ":Zone.Identifier", "rb") as f:
+            zone = f.read(4096)
+    except OSError:
+        return                                          # not downloaded: nothing to pass on
+    r = subprocess.run([tar, "-tf", archive], capture_output=True, text=True, creationflags=NO_WINDOW,
+                       stdin=subprocess.DEVNULL)
+    base = os.path.realpath(dest)
+    for name in r.stdout.splitlines():
+        p = os.path.realpath(os.path.join(dest, name))
+        if p.startswith(base + os.sep) and os.path.isfile(p):
+            try:
+                with open(p + ":Zone.Identifier", "wb") as f:
+                    f.write(zone)
+            except OSError:
+                pass
 
 
 def archive_name(paths: list[str]) -> str:
