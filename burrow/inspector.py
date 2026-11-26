@@ -43,6 +43,8 @@ def _fmt_time(ts) -> str:
 class Inspector(QWidget):
     """The right panel: preview (photo, PDF, video, text, archive, book) and file details."""
     detailsToggled = Signal(bool)
+    openRequested = Signal(str)      # double-click in a folder's contents: open it
+    folder_contents = True           # the window turns this off in columns view (it has its own)
     splitChanged = Signal(float)     # preview height share, for Settings persistence
 
     def __init__(self, parent=None):
@@ -129,6 +131,17 @@ class Inspector(QWidget):
         self.archive_tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.archive_tree.hide()
         self.lay.addWidget(self.archive_tree, 0)
+        # a selected folder's contents: shown in the stage, where photos and videos go
+        self.folder_list = QTreeWidget()
+        self.folder_list.setHeaderLabels(["Name", "Size"])
+        self.folder_list.setRootIsDecorated(False)
+        self.folder_list.setUniformRowHeights(True)
+        self.folder_list.header().setStretchLastSection(False)
+        self.folder_list.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.folder_list.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.folder_list.itemActivated.connect(self._item_activated)   # double-click / Enter: open
+        self.folder_list.hide()
+        self.stage_lay.addWidget(self.folder_list, 1)
         self._epub = None          # EPUB reader: built the first time a book is previewed
         self.lay.addStretch(1)
 
@@ -178,6 +191,8 @@ class Inspector(QWidget):
         self._raw_req = getattr(self, "_raw_req", 0) + 1
         self._archive_req = getattr(self, "_archive_req", 0) + 1
         self.archive_tree.clear()
+        self.folder_list.clear()
+        self.folder_list.hide()
         if self._epub is not None:
             self._epub.clear()
             self.lay.setStretchFactor(self._epub, 0)
@@ -372,6 +387,8 @@ class Inspector(QWidget):
         self._row("Accessed", _fmt_time(e.atime))
         self._row("Attributes", attr_string(e.attrs))
         if e.is_dir:
+            if self.folder_contents and self.prefs.get("preview_folders", True):
+                self._preview_folder(e)
             return
         if e.attrs & CLOUD_ONLY:
             self._set_note("This file is only in the cloud. Open it to download it; "
@@ -406,6 +423,71 @@ class Inspector(QWidget):
         elif pref("preview_text") and (e.ext in TEXT_EXTS or e.ext not in BINARY_EXTS):
             # any size: only the first 256 KB is read, and binary content is detected
             self._preview_text(e)
+
+    # ----- a folder: what's inside, folders first, read on a worker thread ------------------------
+    FOLDER_LIMIT = 500
+
+    def _preview_folder(self, e: Entry):
+        self._shown = e.path
+        self._archive_req = getattr(self, "_archive_req", 0) + 1
+        req, path = self._archive_req, e.path
+        hidden = bool(self.prefs.get("show_hidden", False))
+        from .model import scan_dir
+
+        def read():
+            try:
+                return scan_dir(path, hidden), ""
+            except OSError as ex:
+                return [], ex.strerror or str(ex)
+        places.run_async(read, lambda res: self._folder_ready(path, res, req))
+
+    def _folder_ready(self, path: str, res, req: int):
+        if self._shown != path or req != getattr(self, "_archive_req", 0):
+            return                                   # the selection moved on
+        entries, err = res if isinstance(res, tuple) else ([], str(res))
+        if err:
+            self._set_note(f"Can't read this folder: {err}")
+            return
+        if not entries:
+            self._set_note("This folder is empty.")
+            return
+        from .model import natural_key
+        entries.sort(key=lambda x: (not x.is_dir, natural_key(x.name)))
+        icons = icon_cache()
+        t = self.folder_list
+        t.setUpdatesEnabled(False)
+        items = {}
+        for x in entries[:self.FOLDER_LIMIT]:
+            it = QTreeWidgetItem([x.name, "" if x.is_dir else human_size(x.size)])
+            it.setIcon(0, icons.icon(x))
+            it.setData(0, Qt.ItemDataRole.UserRole, x.path)
+            it.setTextAlignment(1, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            it.setChildIndicatorPolicy(QTreeWidgetItem.ChildIndicatorPolicy.DontShowIndicator)
+            t.addTopLevelItem(it)
+            items[os.path.normcase(x.path)] = it
+        t.setUpdatesEnabled(True)
+        if len(entries) > self.FOLDER_LIMIT:
+            self._set_note(f"Showing the first {self.FOLDER_LIMIT:,} of {len(entries):,} items.")
+        self.preview.clear()                         # the list is the preview: no big icon
+        self.preview.setFixedHeight(0)
+        t.show()
+        self.update_stage()
+        # subfolder sizes from Everything, filled in when they arrive (a few ms)
+        c = everything.client() if self.use_everything and not places.is_remote(path) else None
+        if c is not None and any(x.is_dir for x in entries):
+            def got(sizes, path=path, req=req):
+                if self._shown != path or req != getattr(self, "_archive_req", 0):
+                    return
+                for key, size in sizes.items():
+                    it = items.get(key)
+                    if it is not None:
+                        it.setText(1, human_size(size))
+            c.folder_sizes(path, got)
+
+    def _item_activated(self, item, _col=0):
+        path = item.data(0, Qt.ItemDataRole.UserRole)
+        if path:
+            self.openRequested.emit(path)
 
     def _preview_archive(self, e: Entry):
         """List what's inside without extracting anything. Read on a worker thread."""
@@ -638,7 +720,7 @@ class Inspector(QWidget):
 
     def update_stage(self):
         """Show the stage (with the user's height) when there's a photo/PDF/video to show."""
-        busy = (self._zoom is not None and not self._zoom.isHidden()) or not self.media.isHidden()
+        busy = (self._zoom is not None and not self._zoom.isHidden()) or not self.media.isHidden()             or not self.folder_list.isHidden()
         was = not self.stage.isHidden()
         self.stage.setVisible(busy)
         if busy and not was:

@@ -249,6 +249,7 @@ class SettingsDialog(QDialog):
         f.addRow(check("preview_text", "Text files (YAML, JSON, code, logs…)"))
         f.addRow(check("text_syntax_colors", "Syntax colors in text previews"))
         f.addRow(check("preview_archives", "Archive contents (zip, rar, 7z…)"))
+        f.addRow(check("preview_folders", "Folder contents (list, thumbnails and river views)"))
         f.addRow(check("preview_epub", "EPUB books (cover, details and a chapter reader)"))
         f.addRow(check("inspector_resizable", "Drag handle to make photo / PDF / video previews taller"))
         f.addRow(note("Turned-off previews still show the file's details."))

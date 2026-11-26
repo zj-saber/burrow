@@ -128,6 +128,10 @@ class _RowDelegate(QStyledItemDelegate):
         QTimer.singleShot(200, lambda: view.select_path(new))     # once the model has the new name
 
 
+STEP_KEYS = (Qt.Key.Key_Up, Qt.Key.Key_Down, Qt.Key.Key_PageUp, Qt.Key.Key_PageDown,
+             Qt.Key.Key_Home, Qt.Key.Key_End)
+
+
 class _Column(QListView):
     """One column: smooth pixel scrolling that keeps 3 rows visible ahead of the cursor, and
     arrow keys / typing handed to the owner (in and out of folders, search the newest column)."""
@@ -157,7 +161,9 @@ class _Column(QListView):
 
     def scrollTo(self, index, hint=QAbstractItemView.ScrollHint.EnsureVisible):
         """Glide so the current row keeps AHEAD rows visible above and below it."""
-        if hint != QAbstractItemView.ScrollHint.EnsureVisible or not index.isValid():
+        if not index.isValid() or index.parent() != self.rootIndex():
+            return                                 # another column's item (one shared selection)
+        if hint != QAbstractItemView.ScrollHint.EnsureVisible:
             return super().scrollTo(index, hint)
         sb = self.verticalScrollBar()
         r = self.visualRect(index)
@@ -194,6 +200,9 @@ class _Column(QListView):
         if not mods and k == Qt.Key.Key_Left:
             self.owner.go_out()
             return
+        if not mods and k in STEP_KEYS:
+            self.owner.step(k)                   # ↑ ↓ PgUp PgDn Home End: always in the column
+            return                               # that holds the current item, never Qt's own
         text = ev.text()
         typing = self.owner.searching()          # a space only counts in the middle of a name
         if (k == Qt.Key.Key_Space and not mods and not typing and self.owner.space_handler is not None
@@ -220,6 +229,16 @@ class _Column(QListView):
                 self.owner.newTabRequested.emit(self.owner.path_of(idx))
             return
         super().mousePressEvent(ev)
+        if self.isVisible():
+            self.setFocus()                      # the keys follow the column you clicked
+
+    def hideEvent(self, ev):
+        """Qt closes columns by hiding them: if the keyboard was here, hand it to the column
+        you're in instead of letting Windows pass it on (to the sidebar)."""
+        had = self.hasFocus()
+        super().hideEvent(ev)
+        if had:
+            QTimer.singleShot(0, self.owner.focus_current)
 
     # ----- drops: onto a folder, or into this column's folder (copy / move like the list) -------
     @staticmethod
@@ -560,13 +579,41 @@ class ColumnsView(QColumnView):
         if col is not None:
             col.setFocus()
 
+    def focus_current(self):
+        """Put the keyboard back in the column you're in: called right after the focused column
+        was closed (Windows would otherwise pass the keyboard on, e.g. to the sidebar)."""
+        if not self.isVisible():
+            return
+        col = self.current_column()
+        if col is not None and not col.hasFocus():
+            col.setFocus()
+
     def keyPressEvent(self, ev):
         col = self.current_column()
         if col is not None:
             col.setFocus()
-            col.keyPressEvent(ev)
+            col.keyPressEvent(ev)                # Burrow's handler (never Qt's for the arrows)
             return
         super().keyPressEvent(ev)
+
+    def step(self, key):
+        """↑ ↓ PgUp PgDn Home End in the column holding the current item."""
+        cur = self.currentIndex()
+        parent = cur.parent() if cur.isValid() else self.rootIndex()
+        n = self.fs.rowCount(parent)
+        if not n:
+            return
+        row = cur.row() if cur.isValid() else -1
+        col = self.column_for(parent)
+        rh = max(16, self._delegate.height)
+        page = max(1, (col.viewport().height() // rh) - 1) if col is not None else 10
+        target = {Qt.Key.Key_Up: row - 1, Qt.Key.Key_Down: row + 1, Qt.Key.Key_PageUp: row - page,
+                  Qt.Key.Key_PageDown: row + page, Qt.Key.Key_Home: 0, Qt.Key.Key_End: n - 1}[key]
+        if row < 0:
+            target = 0
+        target = max(0, min(n - 1, target))
+        if target != row:
+            self._go_to(self.fs.index(target, 0, parent))
 
     def _go_to(self, idx: QModelIndex):
         self.setCurrentIndex(idx)

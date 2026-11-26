@@ -624,6 +624,7 @@ class MainWindow(QMainWindow):
         self.inspector = Inspector()
         self.inspector.set_details_visible(bool(self.config.get("inspector_details")))
         self.inspector.detailsToggled.connect(lambda on: self.config.set("inspector_details", on))
+        self.inspector.openRequested.connect(self._open_from_inspector)
         self.inspector.split_ratio = float(self.config.get("inspector_split") or 0.6)
         self.inspector.splitChanged.connect(lambda r: self.config.set("inspector_split", round(r, 3)))
         self.insp_dock = QDockWidget("Inspector")
@@ -1607,6 +1608,7 @@ class MainWindow(QMainWindow):
         v = self.view()
         if v is not None:
             self.inspector.use_everything = bool(self.config.get("everything_sizes"))
+            self.inspector.folder_contents = not v.columns_active()   # columns show it already
             self.inspector.show_entries(v.selected_entries(), v.path)
 
     def _sync_preset_combo(self):
@@ -1643,7 +1645,7 @@ class MainWindow(QMainWindow):
                 v.apply_settings()
 
     FEATURE_KEYS = ("show_folder_icons", "show_tags", "preview_images", "preview_media", "preview_text",
-                    "text_syntax_colors", "preview_archives", "preview_epub", "sidebar_places", "sidebar_cloud",
+                    "text_syntax_colors", "preview_archives", "preview_epub", "preview_folders", "sidebar_places", "sidebar_cloud",
                     "sidebar_tags", "sidebar_network")
 
     def _system_scheme_changed(self, *_):
@@ -2044,6 +2046,16 @@ class MainWindow(QMainWindow):
         timer.timeout.connect(check)
         timer.start()
 
+    def _open_from_inspector(self, path: str):
+        """Double-click in the preview's folder contents: folders open here, files in their app."""
+        if os.path.isdir(path):
+            self.view().navigate(path)
+        else:
+            try:
+                fileops.open_path(path)
+            except OSError as ex:
+                self.statusBar().showMessage(f"Couldn't open it: {ex.strerror or ex}", 5000)
+
     def _job_finished(self, runner):
         """A copy/move finished: tags follow the items, the list refreshes."""
         from . import marks
@@ -2258,7 +2270,7 @@ class MainWindow(QMainWindow):
         _tags.ENABLED = bool(c.get("show_tags"))
         self.inspector.prefs = {k: bool(c.get(k)) for k in (
             "preview_images", "preview_media", "preview_text", "text_syntax_colors", "preview_archives",
-            "preview_epub")}
+            "preview_epub", "preview_folders", "show_hidden")}
         self.sidebar.rebuild_soon()
         for v in self.views():
             v.tree.viewport().update()
@@ -2525,6 +2537,32 @@ class MainWindow(QMainWindow):
         self.config.save()
 
 
+def _crash_log():
+    """Keep the reason if Burrow ever crashes or hits an error: %APPDATA%\\Burrow\\crash.log
+    (the Python stack at a hard crash, and the traceback of any uncaught error, which Burrow
+    survives). Kept under 256 KB."""
+    import faulthandler
+    import traceback
+    from .config import CONFIG_DIR
+    try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        path = os.path.join(CONFIG_DIR, "crash.log")
+        if os.path.exists(path) and os.path.getsize(path) > 256 * 1024:
+            os.replace(path, path + ".old")
+        f = open(path, "a", encoding="utf-8", buffering=1)
+    except OSError:
+        return
+    faulthandler.enable(f)
+    globals()["_CRASH_FILE"] = f                    # keep it open for faulthandler
+
+    def hook(kind, value, tb):
+        import datetime
+        f.write(f"\n--- {datetime.datetime.now():%Y-%m-%d %H:%M:%S} Burrow {__import__('burrow').__version__}\n")
+        f.write("".join(traceback.format_exception(kind, value, tb)))
+        sys.__excepthook__(kind, value, tb)
+    sys.excepthook = hook
+
+
 def main():
     """Start Burrow: hand off to a running copy if there is one, else open the window, tray and watchers."""
     if sys.platform == "win32":
@@ -2532,6 +2570,7 @@ def main():
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Burrow.FileManager")
         except (AttributeError, OSError):
             pass
+    _crash_log()
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

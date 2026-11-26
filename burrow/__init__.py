@@ -1,2 +1,2 @@
 """Burrow — a tabbed file manager for Windows."""
-__version__ = "0.13.10"
+__version__ = "0.13.11"

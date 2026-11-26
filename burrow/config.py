@@ -98,6 +98,7 @@ DEFAULTS = {
     "preview_text": True,
     "text_syntax_colors": True,
     "preview_archives": True,
+    "preview_folders": True,        # a selected folder's contents in the preview (list view)
     "preview_epub": True,
     "media_arrow_seek": True,
     "sidebar_places": True,
