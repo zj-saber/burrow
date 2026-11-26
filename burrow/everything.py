@@ -102,6 +102,19 @@ class EverythingClient(QWidget):
         self._ids = itertools.count(0x4255)       # reply ids, to match answers to questions
         self._pending: dict[int, object] = {}
         self.last_error = ""
+        # Everything answers only the newest question from a window: ask one at a time
+        from collections import deque
+        from PySide6.QtCore import QTimer
+        self._queue = deque()
+        self._busy = None                        # id of the question being answered
+        self._stuck = QTimer(self)
+        self._stuck.setSingleShot(True)
+        self._stuck.setInterval(TIMEOUT_MS + 500)
+        self._stuck.timeout.connect(self._give_up)
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(4000)
+        self._save_timer.timeout.connect(_save_sizes)
 
     def nativeEvent(self, event_type, message):
         """Everything answers by WM_COPYDATA: hand each reply to the query that asked."""
@@ -109,7 +122,13 @@ class EverythingClient(QWidget):
             msg = wintypes.MSG.from_address(int(message))
             if msg.message == WM_COPYDATA and msg.lParam:
                 cds = COPYDATASTRUCT.from_address(msg.lParam)
-                cb = self._pending.pop(int(cds.dwData), None)
+                rid = int(cds.dwData)
+                cb = self._pending.pop(rid, None)
+                if rid == self._busy:            # answered: the next question can go
+                    self._busy = None
+                    self._stuck.stop()
+                    from PySide6.QtCore import QTimer
+                    QTimer.singleShot(0, self._send_next)
                 if cb is not None:
                     data = ctypes.string_at(cds.lpData, cds.cbData)   # only valid during this call
                     try:
@@ -121,7 +140,27 @@ class EverythingClient(QWidget):
 
     def query(self, search: str, callback, request=REQUEST_FULL_PATH | REQUEST_SIZE, limit: int = 0xFFFFFFFF) -> bool:
         """Ask Everything; callback(results) runs on the GUI thread when the answer arrives
-        (a few ms later, via the event loop). Returns False if Everything isn't available."""
+        (a few ms later). Questions wait their turn: Everything only answers a window's newest
+        one. Returns False if Everything isn't available."""
+        if not _everything_hwnd():
+            self.last_error = "Everything isn't running"
+            return False
+        self._queue.append((search, callback, request, limit))
+        if self._busy is None:
+            self._send_next()
+        return True
+
+    def _send_next(self):
+        while self._busy is None and self._queue:
+            self._send(*self._queue.popleft())
+
+    def _give_up(self):
+        """No answer in time: drop that question and go on."""
+        self._pending.pop(self._busy, None)
+        self._busy = None
+        self._send_next()
+
+    def _send(self, search, callback, request, limit) -> bool:
         target = _everything_hwnd()
         if not target:
             self.last_error = "Everything isn't running"
@@ -132,6 +171,8 @@ class EverythingClient(QWidget):
         payload = ctypes.create_string_buffer(header + text, len(header) + len(text))
         cds = COPYDATASTRUCT(COPYDATA_QUERY2W, len(header) + len(text), ctypes.addressof(payload))
         self._pending[rid] = callback
+        self._busy = rid
+        self._stuck.start()
         result = ctypes.c_size_t()
         # SMTO_ABORTIFHUNG (2): a frozen Everything can't freeze us. Everything's reply is a
         # sent message, which Windows delivers to our window while we wait here.
@@ -139,6 +180,9 @@ class EverythingClient(QWidget):
                                       0x0002, TIMEOUT_MS, ctypes.byref(result))
         if not ok or not result.value:
             self._pending.pop(rid, None)
+            if self._busy == rid:
+                self._busy = None
+                self._stuck.stop()
             self.last_error = "Everything didn't answer"
             return False
         self.last_error = ""
@@ -149,9 +193,18 @@ class EverythingClient(QWidget):
         parent = folder.rstrip("\\") if len(folder) > 3 else folder
         search = f'parent:"{_escape(parent)}" folder:'
 
+        key = os.path.normcase(parent)
+        known = _sizes_cache().get(key)
+        if known:
+            callback(dict(known))                # the last recorded sizes, at once
+
         def done(results):
-            callback({os.path.normcase(p): s for p, s, is_folder, _m in results if is_folder and s is not None})
-        return self.query(search, done)
+            sizes = {os.path.normcase(p): s for p, s, is_folder, _m in results if is_folder and s is not None}
+            if sizes:
+                _remember(key, sizes)
+                self._save_timer.start()
+            callback(sizes)
+        return self.query(search, done) or bool(known)
 
     def search_under(self, folder: str, text: str, callback, limit: int = 2000) -> bool:
         """Everything under folder (any depth) whose name matches text, with Everything's own
@@ -169,9 +222,60 @@ class EverythingClient(QWidget):
             return False
         norm = os.path.normcase(path)
 
+        told = []
+
         def done(sizes):
-            callback(sizes.get(norm))
+            if norm in sizes and not told:       # once: the remembered size or the fresh one
+                told.append(1)
+                callback(sizes[norm])
         return self.folder_sizes(parent, done)
+
+
+# ----- folder sizes remembered between runs (%APPDATA%\\Burrow\\sizes.json) -----------------
+# Shown at once when a folder opens, and when Everything isn't running; Everything's fresh
+# answer replaces them a few ms later.
+_SIZES: dict | None = None
+MAX_FOLDERS = 1500
+
+
+def _sizes_path():
+    from .config import CONFIG_DIR
+    return os.path.join(CONFIG_DIR, "sizes.json")
+
+
+def _sizes_cache() -> dict:
+    global _SIZES
+    if _SIZES is None:
+        import json
+        try:
+            with open(_sizes_path(), encoding="utf-8") as f:
+                data = json.load(f)
+            _SIZES = {k: v for k, v in data.items() if isinstance(v, dict)} if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            _SIZES = {}
+    return _SIZES
+
+
+def _remember(parent_key: str, sizes: dict):
+    cache = _sizes_cache()
+    cache.pop(parent_key, None)
+    cache[parent_key] = {k: int(v) for k, v in list(sizes.items())[:3000]}
+    while len(cache) > MAX_FOLDERS:              # oldest first
+        cache.pop(next(iter(cache)))
+
+
+
+
+def _save_sizes():
+    import json
+    try:
+        os.makedirs(os.path.dirname(_sizes_path()), exist_ok=True)
+        tmp = _sizes_path() + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(_sizes_cache(), f, separators=(",", ":"))
+        os.replace(tmp, _sizes_path())
+    except OSError:
+        pass
 
 
 _client: EverythingClient | None = None

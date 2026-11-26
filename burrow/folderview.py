@@ -4,14 +4,14 @@ from __future__ import annotations
 import os
 import re
 
-from PySide6.QtCore import QFileSystemWatcher, QItemSelection, QItemSelectionModel, QPointF, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QFileSystemWatcher, QItemSelection, QItemSelectionModel, QPointF, QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPalette
 from PySide6.QtWidgets import (QAbstractItemView, QFrame, QHeaderView, QLabel, QLineEdit, QListView, QMenu,
                                QStyle, QStyledItemDelegate, QTreeView, QVBoxLayout, QWidget)
 
 from . import dialogs, everything, fileops, marks, places, tags, theme
 from .config import COLUMN_TITLES, COLUMNS, DEFAULT_WIDTHS, Config
-from .model import DRIVES, ENTRY_ROLE, NETWORK, DirModel, Entry, FilterProxy
+from .model import DRIVES, ENTRY_ROLE, NETWORK, DirModel, Entry, FilterProxy, cloud_state
 
 
 _HOVER = QStyle.StateFlag.State_MouseOver
@@ -116,17 +116,17 @@ class NameDelegate(RowDelegate):
             QTimer.singleShot(0, select)
 
     def paint(self, painter, option, index):
-        """Name cell, plus colored tag dots at its right end. With no tags anywhere this is a
-        single empty-dict check; with tags, one dict lookup per visible name."""
+        """Name cell, plus colored tag dots and the cloud sync status at its right end. With no
+        tags and no cloud folder this costs two quick checks per visible name."""
         store = tags.store()
-        if not tags.ENABLED or not store.items:
-            return super().paint(painter, option, index)
         e = index.data(ENTRY_ROLE)
-        ids = store.get(e.path) if e is not None else []
-        if not ids:
+        ids = store.get(e.path) if (e is not None and tags.ENABLED and store.items) else []
+        cloud = cloud_state(e.path, e.attrs, e.is_dir) if (e is not None and not e.is_drive) else None
+        if not ids and not cloud:
             return super().paint(painter, option, index)
         r = option.rect
-        dots_w = 10 * len(ids) + 8
+        cloud_w = 20 if cloud else 0
+        dots_w = (10 * len(ids) + 8 if ids else 0) + cloud_w
         # fill the dots area like the rest of the row (selection / hover)
         state = option.state
         if state & _SELECTED:
@@ -146,6 +146,9 @@ class NameDelegate(RowDelegate):
             painter.drawEllipse(QPointF(x + 4, cy), 4.5, 4.5)
             x += 10
         painter.restore()
+        if cloud:
+            theme.paint_cloud(painter, QRect(r.right() - cloud_w, r.top(), cloud_w, r.height()), cloud,
+                              option.palette.color(QPalette.ColorRole.PlaceholderText))
 
 
 class FilterEdit(QLineEdit):
@@ -472,6 +475,11 @@ class FolderView(QWidget):
         else:
             self._load([select] if select else [], select, clear=True)
         self._sync_own_layout()
+        if not self._from_columns:               # not while arrowing through columns
+            saved = (self.config.folder_layout(path) or {}).get("mode")
+            want = saved or getattr(self, "_chosen_mode", self.mode)
+            if want != self.mode:
+                self.mode = want
         self._sync_drive_bars()
         self._sync_mode_widgets(select)
         self.pathChanged.emit(path)
@@ -579,7 +587,8 @@ class FolderView(QWidget):
         return v
 
     def set_mode(self, mode: str):
-        if mode == self.mode:
+        self._chosen_mode = mode                 # what you picked; folders with a saved view
+        if mode == self.mode:                    # show theirs, then this comes back
             return
         self.mode = mode
         self._sync_mode_widgets()
@@ -1079,6 +1088,21 @@ class FolderView(QWidget):
         self.own_layout = True
         self.config.set_folder_layout(self.path, self.read_layout(prune=True), source=self)
         self.statusMessage.emit(f"Column layout saved for {title_for(self.path)}")
+
+    def save_view(self, everywhere: bool = False):
+        """The toolbar's Save view: this view (list / columns / thumbnails / river, columns,
+        sort) is remembered for this folder, or becomes the one every folder opens with."""
+        self._flush_layout()
+        lay = dict(self.read_layout(prune=True), mode=self.mode)
+        if everywhere:
+            self.config.set_view(lay, source=self)
+            self.config.set("view_mode", self.mode)
+            self.applied_version = self.config.view_version
+            self.statusMessage.emit("View saved for all folders")
+        else:
+            self.own_layout = True
+            self.config.set_folder_layout(self.path, lay, source=self)
+            self.statusMessage.emit(f"View saved for {title_for(self.path)}: it opens this way from now on")
 
     def forget_folder_layout(self):
         self._flush_layout()

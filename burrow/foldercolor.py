@@ -111,12 +111,6 @@ def _read(path: str) -> tuple[str, str]:
         return data.decode("mbcs", errors="replace"), "utf-16"
 
 
-def _sections(text: str):
-    """Yield (section_name_lower, line_index) for every [section] header."""
-    for i, line in enumerate(text.splitlines()):
-        s = line.strip()
-        if s.startswith("[") and s.endswith("]"):
-            yield s[1:-1].strip().lower(), i
 
 
 def _get(text: str, section: str, key: str) -> str | None:

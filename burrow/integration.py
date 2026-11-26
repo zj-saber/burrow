@@ -40,6 +40,59 @@ def launch_command() -> str:
     return f'"{pyw if os.path.isfile(pyw) else exe}" "{script}"'
 
 
+def temporary_location() -> bool:
+    """Burrow is running from a place that won't last (inside a zip, %TEMP%). Registering it
+    there would leave Windows pointing at a missing program ("Application not found" when any
+    folder, OneDrive's included, is opened), so it isn't allowed."""
+    if not getattr(sys, "frozen", False):
+        return False
+    import tempfile
+    here = os.path.normcase(os.path.realpath(sys.executable))
+    tmp = os.path.normcase(os.path.realpath(tempfile.gettempdir()))
+    return here.startswith(tmp + os.sep) or ".zip" + os.sep in here
+
+
+TEMP_MESSAGE = ("Burrow is running from a temporary place (inside a zip or the Temp folder), so Windows can't be "
+                "told to open folders with it: once that copy is gone, every folder would fail to open. Install "
+                "Burrow first (install.ps1, or unzip it to a permanent folder), then turn this on there.")
+
+
+def registered_command(kind: str) -> str | None:
+    """The command Windows has for Burrow (kind: "folders" or "win_e"), or None."""
+    if not WIN:
+        return None
+    winreg = _reg()
+    path = (rf"Software\Classes\Directory\shell\{VERB}\command" if kind == "folders"
+            else rf"Software\Classes\CLSID\{THIS_PC_CLSID}\shell\opennewwindow\command")
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path) as k:
+            return winreg.QueryValueEx(k, "")[0]
+    except OSError:
+        return None
+
+
+def repair() -> list[str]:
+    """At start: if Windows opens folders (or Win+E) with a Burrow that is no longer where it
+    was registered (moved, reinstalled, updated elsewhere), point it at this one. If this copy
+    is a temporary one, take the registration away instead, so folders open in Explorer again.
+    Returns what was fixed."""
+    fixed = []
+    if not WIN or not getattr(sys, "frozen", False):
+        return fixed
+    want = launch_command()
+    for kind, on, setter in (("folders", is_default(), set_default), ("win_e", is_win_e(), set_win_e)):
+        cmd = registered_command(kind)
+        if not on or not cmd:
+            continue
+        if temporary_location():
+            setter(False)
+            fixed.append(f"{kind}: removed (temporary copy)")
+        elif not cmd.startswith(want):
+            setter(True)
+            fixed.append(f"{kind}: now points at {sys.executable}")
+    return fixed
+
+
 # ----- default file manager ----------------------------------------------------------------
 def _reg():
     import winreg
@@ -88,6 +141,8 @@ def set_default(enable: bool) -> str | None:
     """Register (or unregister) Burrow as the default file manager. Returns an error or None."""
     if not WIN:
         return "Only available on Windows."
+    if enable and temporary_location():
+        return TEMP_MESSAGE
     winreg = _reg()
     cmd = launch_command()
     try:
@@ -128,6 +183,8 @@ def set_win_e(enable: bool) -> str | None:
     opening folders in Burrow."""
     if not WIN:
         return "Only available on Windows."
+    if enable and temporary_location():
+        return TEMP_MESSAGE
     try:
         key = rf"Software\Classes\CLSID\{THIS_PC_CLSID}\shell\opennewwindow\command"
         if enable:

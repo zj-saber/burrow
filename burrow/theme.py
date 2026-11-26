@@ -112,8 +112,6 @@ PALETTES = {"burrow": _BURROW, "primary": _PRIMARY, "greyscale": _GREYSCALE, "se
 PALETTE_NAMES = {"burrow": "Burrow (cool blue)", "primary": "Primary (warm, inspired by the Obsidian theme)",
                  "greyscale": "Greyscale", "sepia": "Sepia", "oled": "OLED black (always dark)",
                  "calm": "Calm (easy on the eyes)"}
-THEMES = _BURROW                       # kept for callers that only need the default palette
-
 _current: dict = dict(_BURROW["light"], name="light", palette="burrow")
 _default_font = None
 
@@ -195,7 +193,7 @@ GLYPHS = {
     "new": "", "new_folder": "", "new_file": "", "cut": "", "copy": "",
     "paste": "", "rename": "", "extract": "", "delete": "", "sort": "",
     "view": "", "filter": "", "compare": "", "duplicates": "",
-    "bulk_rename": "", "auto_folder": "", "auto_update": "",
+    "bulk_rename": "", "auto_folder": "", "auto_update": "", "mode_list": "", "mode_columns": "", "mode_thumbs": "", "mode_river": "", "save_view": "",
 }
 _icon_font_family: str | None = None
 _icon_cache: dict = {}
@@ -375,6 +373,25 @@ def paint_hover(p: QPainter, rect, color: QColor):
     p.setPen(Qt.PenStyle.NoPen)
     p.setBrush(color)
     p.drawRoundedRect(QRectF(rect).adjusted(3, 1, -3, -1), 6, 6)
+    p.restore()
+
+
+# ----- cloud sync status glyphs (like Explorer's Status column) ------------------------------
+CLOUD_GLYPHS = {"online": ("\ue753", None), "local": ("\ue930", "#2fa84f"), "pinned": ("\uec61", "#2fa84f")}
+
+
+def paint_cloud(p: QPainter, rect, state: str, dim_color):
+    """A small cloud (online-only) or green check (on this device; solid: always kept)."""
+    glyph, color = CLOUD_GLYPHS.get(state, (None, None))
+    fam = _icon_family()
+    if not glyph or not fam:
+        return
+    p.save()
+    f = QFont(fam)
+    f.setPixelSize(max(10, min(14, rect.height() - 8)))
+    p.setFont(f)
+    p.setPen(QColor(color) if color else dim_color)
+    p.drawText(rect, Qt.AlignmentFlag.AlignCenter, glyph)
     p.restore()
 
 

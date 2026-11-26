@@ -386,6 +386,9 @@ class ThumbDelegate(QStyledItemDelegate):
 class ThumbView(_Extras, QListView):
     """Thumbnails (river=False): a grid of pictures with names. River (river=True): pictures at
     one height in flowing rows, each as wide as its picture; the name is in the tooltip."""
+    size_px = 160                    # defaults: Qt lays out once while the view is being built
+    river = False
+    _sizes: dict = {}
 
     def __init__(self, owner, river: bool, parent=None):
         super().__init__(parent)
@@ -398,6 +401,8 @@ class ThumbView(_Extras, QListView):
         self.setMovement(QListView.Movement.Static)
         self.setUniformItemSizes(not river)
         self.setSpacing(4 if river else 2)
+        if river:                                # a scroll bar appearing would change the width
+            self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         self.setWordWrap(False)
         self.size_px = 160
         self.setItemDelegate(ThumbDelegate(self))
@@ -422,9 +427,57 @@ class ThumbView(_Extras, QListView):
         self.size_px = (120 + (icon_px - 16) * 4) if self.river else (96 + (icon_px - 16) * 8 // 3)
         self.doItemsLayout()
 
+    def doItemsLayout(self):
+        if self.river:
+            self._justify()
+        super().doItemsLayout()
+
+    def _justify(self):
+        """Split the pictures into rows and scale each row to fill the width exactly (its height
+        changes a little; no picture is cropped). The last row keeps the normal height."""
+        model = self.model()
+        avail = self.viewport().width() - 2
+        sp = self.spacing()
+        base = self.size_px
+        sizes, row, row_w = {}, [], 0.0
+
+        def place(items, total, last):
+            free = avail - sp * (len(items) + 1)
+            scale = free / total if total else 1.0
+            if last and scale > 1.0:
+                scale = 1.0                      # a short last row isn't blown up
+            h = max(24, int(base * scale))
+            widths = [max(12, int(w * scale)) for _r, w in items]
+            if not last or scale < 1.0:
+                widths[-1] += max(0, free - sum(widths) - 1)    # round-off goes to the last one
+            for (r, _w), wd in zip(items, widths):
+                sizes[r] = QSize(wd, h)
+
+        if model is None or avail < 50:
+            self._sizes = {}
+            return
+        for r in range(model.rowCount()):
+            w = max(base // 2, base * self.aspect(model.index(r, 0).data(ENTRY_ROLE)))
+            row.append((r, w))
+            row_w += w
+            if row_w + sp * (len(row) + 1) >= avail:
+                place(row, row_w, False)
+                row, row_w = [], 0.0
+        if row:
+            place(row, row_w, True)
+        self._sizes = sizes
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        if self.river and ev.size().width() != ev.oldSize().width():
+            self._relayout.start()               # new width: new rows
+
     def item_size(self, index) -> QSize:
         s = self.size_px
         if self.river:
+            got = getattr(self, "_sizes", {}).get(index.row())
+            if got is not None:
+                return got
             return QSize(max(s // 2, round(s * self.aspect(index.data(ENTRY_ROLE)))), s)
         return QSize(s + 16, s + self.fontMetrics().height() + 16)
 
@@ -456,7 +509,9 @@ class ThumbView(_Extras, QListView):
         """River: read every picture's shape (headers only, off the GUI thread), then lay out once."""
         from . import places
         model = self.owner.model
+        from .model import CLOUD_ONLY
         todo = [e.path for e in model.entries if not e.is_dir and e.path not in ASPECTS
+                and not e.attrs & CLOUD_ONLY                      # never download a cloud file
                 and os.path.splitext(e.name)[1][1:].lower() in _qt_image_exts()][:5000]
         if not todo or places.is_remote(todo[0]):
             return

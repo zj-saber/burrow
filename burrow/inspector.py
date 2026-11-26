@@ -386,6 +386,10 @@ class Inspector(QWidget):
         self._row("Modified", _fmt_time(e.mtime))
         self._row("Accessed", _fmt_time(e.atime))
         self._row("Attributes", attr_string(e.attrs))
+        from .model import CLOUD_STATES, cloud_state
+        st = cloud_state(e.path, e.attrs, e.is_dir)
+        if st:
+            self._row("Status", CLOUD_STATES[st])
         if e.is_dir:
             if self.folder_contents and self.prefs.get("preview_folders", True):
                 self._preview_folder(e)

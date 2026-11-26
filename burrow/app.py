@@ -297,6 +297,11 @@ def _startup_chores(win):
         from . import updater
         updater.cleanup()
         updater.sync_registered_version()
+        # Windows must never be left opening folders with a Burrow that isn't there any more
+        try:
+            integration.repair()
+        except OSError:
+            pass
     if win.config.get("check_updates"):          # Auto update: every start looks for a new version
         import time
         from . import updater
@@ -341,6 +346,8 @@ def route_external(args):
 
 
 class MainWindow(QMainWindow):
+    VIEW_MODES = (("list", "List"), ("columns", "Columns"), ("thumbs", "Thumbnails"), ("river", "River (photos)"))
+
     """One Burrow window: panes of tabs, sidebar, inspector, status bar, menus and file commands."""
     def __init__(self, config: Config, paths: list[str], primary: bool = True):
         super().__init__()
@@ -468,7 +475,7 @@ class MainWindow(QMainWindow):
         self.act_hidden = A("Show hidden files", lambda on: self.config.set("show_hidden", on), "Ctrl+H", checkable=True)
         self.act_columns_view = A("Columns view", lambda on: self.set_view_mode("columns" if on else "list"),
                                   "Ctrl+Shift+L", checkable=True)
-        self.act_folders_first = A("Folders first", lambda on: (self.view().set_folders_first(on), self._sync_sort_mode()), checkable=True)
+        self.act_folders_first = A("Folders first", lambda on: (self.view().set_folders_first(on), self._sync_view_buttons()), checkable=True)
         self.act_bookmark = A("Bookmark this folder", self.toggle_bookmark, "Ctrl+D")
         self.act_settings = A("Settings…", self.open_settings, "Ctrl+,", tip="Settings (Ctrl+,)")
         self.act_terminal = A("Open terminal here", self.open_terminal)
@@ -663,21 +670,27 @@ class MainWindow(QMainWindow):
         self.status_left = QLabel()
         self.status_right = QLabel()
         self.statusBar().setSizeGripEnabled(False)
-        # Sorting toggle (FilePilot-style): folders on top, or everything mixed by the column
-        self.sort_mode_btn = QToolButton()
-        self.sort_mode_btn.setObjectName("statusToggle")
-        self.sort_mode_btn.setCheckable(True)
-        self.sort_mode_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.sort_mode_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.sort_mode_btn.toggled.connect(self._sort_mode_toggled)
+        # The four views as icons side by side (the lit one is this tab's); sorting is in the
+        # toolbar's Sort menu
         self.config.viewChanged.connect(self._view_preset_changed)
-        self.view_mode_btn = QToolButton()
-        self.view_mode_btn.setObjectName("statusToggle")
-        self.view_mode_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.view_mode_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.view_mode_btn.clicked.connect(self._next_view_mode)
-        self.view_mode_btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.view_mode_btn.customContextMenuRequested.connect(lambda _p: self._view_mode_menu())
+        self.view_buttons = {}
+        self.view_box = QWidget()
+        vb = QHBoxLayout(self.view_box)
+        vb.setContentsMargins(0, 0, 0, 0)
+        vb.setSpacing(2)
+        for mode, title in self.VIEW_MODES:
+            b = QToolButton()
+            b.setObjectName("statusIcon")
+            b.setCheckable(True)
+            b.setAutoRaise(True)
+            b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            keys = {"list": "Ctrl+Shift+6", "columns": "Ctrl+Shift+L", "thumbs": "Ctrl+Shift+7",
+                    "river": "Ctrl+Shift+8"}[mode]
+            b.setToolTip(f"{title} ({keys})")
+            b.clicked.connect(lambda _=False, md=mode: self.set_view_mode(md))
+            vb.addWidget(b)
+            self.view_buttons[mode] = b
         # icon size slider (16-64 px), live for every tab in every window
         from PySide6.QtWidgets import QSlider
         self.icon_small = QLabel("□")
@@ -734,8 +747,7 @@ class MainWindow(QMainWindow):
         g.addLayout(left, 0, 0)
         mid = QHBoxLayout()
         mid.setSpacing(6)
-        for wdg in (self.sort_mode_btn, self.view_mode_btn):
-            mid.addWidget(wdg)
+        mid.addWidget(self.view_box)
         g.addLayout(mid, 0, 1)
         right = QHBoxLayout()
         right.setSpacing(4)
@@ -825,7 +837,31 @@ class MainWindow(QMainWindow):
         return self.inspector.media.seek_by(direction * (30000 if big else 5000))
 
     def _space_pressed(self) -> bool:
+        """Space: Quick Look (a big preview, like macOS), or play / pause the inspector's video
+        when Quick Look is switched off in Settings."""
+        if self.config.get("space_quicklook"):
+            return self.toggle_quicklook()
         return self.insp_dock.isVisible() and self.inspector.toggle_media()
+
+    def toggle_quicklook(self) -> bool:
+        ql = getattr(self, "_quicklook", None)
+        if ql is not None and ql.isVisible():
+            ql.close()
+            return True
+        v = self.view()
+        e = v.current_entry() if v is not None else None
+        if e is None or e.is_drive:
+            return False
+        if ql is None:
+            from .quicklook import QuickLook
+            ql = self._quicklook = QuickLook(self)
+        self.inspector.media.pause()
+        ql.place()
+        ql.show_entry(e)
+        ql.show()
+        ql.raise_()
+        ql.activateWindow()
+        return True
 
     def _add_tag_menu(self, m: QMenu, paths: list[str]):
         sub = m.addMenu("Tags")
@@ -901,6 +937,8 @@ class MainWindow(QMainWindow):
         self._sync_bar_toggle()
         self.statusBar().setStyleSheet(theme.statusbar_qss(c))
         self._sync_auto_update_icon()
+        for mode, btn in self.view_buttons.items():          # themed icons for the four views
+            btn.setIcon(theme.icon("mode_" + mode, 16))
         self.inspector.setStyleSheet(theme.inspector_qss(c))
         self.inspector.media.apply_theme()
         self.sidebar.apply_theme(c)
@@ -1388,6 +1426,7 @@ class MainWindow(QMainWindow):
         self.act_bookmark.setEnabled(not places.is_special(v.path))
         self.sidebar.highlight(v.path)
         self.command_bar.sync()
+        self._sync_view_buttons(v)                  # a folder's saved view may have changed it
         self.setWindowTitle(f"{title_for(v.path)} — {APP_NAME}")
         self.status_right.setText("")
         self.usage_pill.set_usage(None, None)
@@ -1430,27 +1469,19 @@ class MainWindow(QMainWindow):
         self._status_text = "     ".join(parts)
         if not self.statusBar().currentMessage():
             self.status_left.setText(self._status_text)
-        self._sync_sort_mode(v)
+        self._sync_view_buttons(v)
 
     def _status_message(self, text: str):
         """showMessage() text goes in the left label for a while, then the counts come back."""
         self.status_left.setText(text or self._status_text)
 
-    def _sync_sort_mode(self, v=None):
-        """Keep the status bar's Sort switch in step with the active view."""
+    def _sync_view_buttons(self, v=None):
+        """Light the bottom bar's icon for this tab's view."""
         v = v or self.view()
         if v is None:
             return
-        mixed = not v.model.folders_first
-        self.sort_mode_btn.blockSignals(True)
-        self.sort_mode_btn.setChecked(mixed)
-        self.sort_mode_btn.blockSignals(False)
-        self.sort_mode_btn.setText("Sort: mixed" if mixed else "Sort: folders first")
-        self.sort_mode_btn.setVisible(bool(self.config.get("status_sort_toggle")) and not v.columns_active())
-        self.view_mode_btn.setText("View: " + dict(self.VIEW_MODES)[v.mode].split(" ")[0].lower())
-        self.view_mode_btn.setToolTip("Click for the next view (list, columns, thumbnails, river). Right-click to pick one.")
-        self.sort_mode_btn.setToolTip("Files, folders and archives sorted together by the column — click for folders first"
-                                      if mixed else "Folders on top, then files — click to sort everything by the column only")
+        for mode, b in self.view_buttons.items():
+            b.setChecked(mode == v.mode)
 
     def set_icon_size(self, px: int):
         self.config.set("icon_size", int(px))
@@ -1462,31 +1493,10 @@ class MainWindow(QMainWindow):
                 win.icon_slider.setValue(px)
                 win.icon_slider.blockSignals(False)
 
-    VIEW_MODES = (("list", "List"), ("columns", "Columns"), ("thumbs", "Thumbnails"), ("river", "River (photos)"))
-
     def _sync_view_actions(self):
         mode = self.view().mode
         for a, m in ((self.act_columns_view, "columns"), (self.act_thumbs_view, "thumbs"), (self.act_river_view, "river")):
             a.setChecked(mode == m)
-
-    def _next_view_mode(self):
-        """The status bar's View button: list → columns → thumbnails → river → list."""
-        modes = [m for m, _t in self.VIEW_MODES]
-        cur = self.view().mode if self.view() is not None else "list"
-        self.set_view_mode(modes[(modes.index(cur) + 1) % len(modes)] if cur in modes else "list")
-
-    def _view_mode_menu(self):
-        """The status bar's View button: pick one of the four views."""
-        from PySide6.QtGui import QActionGroup
-        m = QMenu(self)
-        group = QActionGroup(m)
-        for mode, title in self.VIEW_MODES:
-            a = m.addAction(title)
-            a.setCheckable(True)
-            a.setChecked(self.view().mode == mode)
-            group.addAction(a)
-            a.triggered.connect(lambda _=False, md=mode: self.set_view_mode(md))
-        m.exec(self.view_mode_btn.mapToGlobal(self.view_mode_btn.rect().topLeft()) - QPoint(0, m.sizeHint().height()))
 
     def set_view_mode(self, mode: str):
         """List, columns, thumbnails or river for this tab; new tabs open the same way."""
@@ -1494,7 +1504,7 @@ class MainWindow(QMainWindow):
         if v is not None:
             v.set_mode(mode)
         self.config.set("view_mode", mode)
-        self._sync_sort_mode(v)
+        self._sync_view_buttons(v)
 
     # ----- window material (Mica / Acrylic) ----------------------------------------------
     def _translucent(self) -> bool:
@@ -1576,7 +1586,7 @@ class MainWindow(QMainWindow):
     def apply_ui_switches(self):
         """Settings switches for the status bar, sidebar dragging, preview handle and keys."""
         c = self.config
-        self.view_mode_btn.setVisible(bool(c.get("status_view_toggle")))
+        self.view_box.setVisible(bool(c.get("status_view_toggle")))
         self.auto_update_chk.setVisible(bool(c.get("status_auto_update")))
         if self.auto_update_chk.isChecked() != bool(c.get("check_updates")):
             self.auto_update_chk.blockSignals(True)
@@ -1599,16 +1609,10 @@ class MainWindow(QMainWindow):
             self._scheme = c.get("shortcut_scheme")
             self.apply_shortcuts()
             self.sidebar.rebuild_soon()            # the bookmarks hint names the key
-        self._sync_sort_mode()
+        self._sync_view_buttons()
 
     def _view_preset_changed(self, _src=None):
-        QTimer.singleShot(0, self, self._sync_sort_mode)    # after the views have re-applied it
-
-    def _sort_mode_toggled(self, mixed: bool):
-        v = self.view()
-        if v is not None:
-            v.set_folders_first(not mixed)     # saved to the view preset, so every folder follows
-        self._sync_sort_mode(v)
+        QTimer.singleShot(0, self, self._sync_view_buttons)    # after the views have re-applied it
 
     def _update_inspector(self):
         if not self.insp_dock.isVisible():

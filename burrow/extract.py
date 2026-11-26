@@ -46,13 +46,6 @@ def tool() -> tuple[str, str] | None:
     return _tool_cache[0]
 
 
-def tool_name() -> str:
-    t = tool()
-    if t is None:
-        return ""
-    exe = os.path.basename(t[1]).lower()
-    return {"winrar": "WinRAR", "tar": "Windows"}.get(t[0], "NanaZip" if "nanazip" in exe
-                                                     or "windowsapps" in t[1].lower() else "7-Zip")
 
 
 def is_archive(path: str) -> bool:

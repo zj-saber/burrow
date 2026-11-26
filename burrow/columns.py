@@ -25,6 +25,28 @@ def compact_size(n: int) -> str:
     return f"{max(mb, 0.1):.1f} MB" if n else "0 MB"
 
 
+_CLOUD_CACHE: dict = {}
+
+
+def _cloud_state_of(path: str, is_dir: bool):
+    """Sync status for columns view (QFileSystemModel has no attributes): a stat, cached 15 s."""
+    import time as _t
+    hit = _CLOUD_CACHE.get(path)
+    now = _t.monotonic()
+    if hit is not None and now - hit[1] < 15:
+        return hit[0]
+    from .model import cloud_state
+    try:
+        attrs = getattr(os.stat(path, follow_symlinks=False), "st_file_attributes", 0)
+    except OSError:
+        attrs = 0
+    st = cloud_state(path, attrs, is_dir)
+    if len(_CLOUD_CACHE) > 20000:
+        _CLOUD_CACHE.clear()
+    _CLOUD_CACHE[path] = (st, now)
+    return st
+
+
 class _RowDelegate(QStyledItemDelegate):
     """Columns rows: a minimum height and the clipboard tint."""
     def __init__(self, height: int, parent=None):
@@ -45,30 +67,42 @@ class _RowDelegate(QStyledItemDelegate):
             theme.paint_hover(painter, option.rect, getattr(view, "hover_color", QColor(0, 0, 0, 0)))
             option.state &= ~QStyle.StateFlag.State_MouseOver          # the style's own hover would double it
         size = view.size_for(index) if getattr(view, "show_sizes", False) else None
-        if size is None:
+        from .model import in_cloud
+        path = os.path.normpath(index.model().filePath(index))
+        cloud = _cloud_state_of(path, index.model().isDir(index)) if in_cloud(path) else None
+        # Right end of the row, from the edge in: 6 px · size · 10 px · cloud (18 px); the name
+        # ends 10 px before whatever comes first.
+        r = option.rect
+        font = option.font
+        font.setPointSizeF(max(6.5, font.pointSizeF() * 0.82))
+        text = compact_size(size) if size is not None else ""
+        from PySide6.QtGui import QFontMetrics
+        size_w = QFontMetrics(font).horizontalAdvance(text) + 16 if text else 6
+        cloud_w = 18 if cloud else 0
+        tail = size_w + cloud_w + (4 if cloud else 0)
+        if tail <= 6:
             super().paint(painter, option, index)
         else:
-            from PySide6.QtWidgets import QStyleOptionViewItem
-            text = compact_size(size)
-            font = option.font
-            font.setPointSizeF(max(6.5, font.pointSizeF() * 0.82))
-            from PySide6.QtGui import QFontMetrics
-            w = QFontMetrics(font).horizontalAdvance(text) + 10
+            from PySide6.QtWidgets import QStyle, QStyleOptionViewItem
             full = QStyleOptionViewItem(option)                      # selection/hover across the whole row
             self.initStyleOption(full, index)
-            from PySide6.QtWidgets import QStyle
             style = full.widget.style() if full.widget else view.style()
             style.drawPrimitive(QStyle.PrimitiveElement.PE_PanelItemViewItem, full, painter, full.widget)
             opt = QStyleOptionViewItem(option)
-            opt.rect = option.rect.adjusted(0, 0, -w, 0)           # the name ends before the size
+            opt.rect = r.adjusted(0, 0, -tail, 0)                 # the name ends before the tail
             super().paint(painter, opt, index)
-            painter.save()
-            painter.setFont(font)
-            c = QColor(option.palette.color(QPalette.ColorRole.Text))
-            c.setAlpha(150)
-            painter.setPen(c)
-            painter.drawText(option.rect.adjusted(0, 0, -8, 0), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, text)
-            painter.restore()
+            if text:
+                painter.save()
+                painter.setFont(font)
+                c = QColor(option.palette.color(QPalette.ColorRole.Text))
+                c.setAlpha(150)
+                painter.setPen(c)
+                painter.drawText(r.adjusted(0, 0, -6, 0), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, text)
+                painter.restore()
+            if cloud:
+                from . import theme
+                theme.paint_cloud(painter, r.adjusted(r.width() - size_w - cloud_w, 0, -size_w, 0), cloud,
+                                  option.palette.color(QPalette.ColorRole.PlaceholderText))
         from . import marks, tags
         if marks.MARKS:
             k = marks.MARKS.get(os.path.normpath(index.model().filePath(index)).lower())

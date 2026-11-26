@@ -34,8 +34,6 @@ def tag_location(tag: str) -> str:
     return TAG_PREFIX + tag
 
 
-def is_tag_location(path: str) -> bool:
-    return bool(path) and path.startswith(TAG_PREFIX)
 
 
 ENABLED = True       # Settings: show tags (dots, menu, sidebar)

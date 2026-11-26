@@ -29,6 +29,42 @@ ATTR_ENCRYPTED = 0x4000
 ATTR_RECALL_ON_OPEN = 0x40000
 ATTR_RECALL_ON_DATA_ACCESS = 0x400000
 CLOUD_ONLY = ATTR_OFFLINE | ATTR_RECALL_ON_OPEN | ATTR_RECALL_ON_DATA_ACCESS
+ATTR_PINNED = 0x80000                    # "Always keep on this device"
+ATTR_UNPINNED = 0x100000                 # "Free up space": goes back to online-only
+
+CLOUD_STATES = {"online": "Online-only (opening it downloads it)",
+                "local": "Available on this device",
+                "pinned": "Always kept on this device"}
+_cloud_roots: list | None = None
+
+
+def cloud_roots() -> list[str]:
+    """Folders synced by a cloud provider (normcased, with a trailing backslash)."""
+    global _cloud_roots
+    if _cloud_roots is None:
+        try:
+            _cloud_roots = [os.path.normcase(os.path.normpath(p)).rstrip("\\") + "\\"
+                            for _n, p in places.cloud_folders()]
+        except Exception:                        # noqa: BLE001 - no roots is fine
+            _cloud_roots = []
+    return _cloud_roots
+
+
+def in_cloud(path: str) -> bool:
+    p = os.path.normcase(path)
+    return any(p.startswith(r) or p + "\\" == r for r in cloud_roots())
+
+
+def cloud_state(path: str, attrs: int, is_dir: bool = False) -> str | None:
+    """'online', 'local', 'pinned' for items in a synced folder, like Explorer's Status column
+    (read from the attributes the sync engine sets; nothing is downloaded). None elsewhere."""
+    if attrs & ATTR_PINNED:
+        return "pinned"
+    if attrs & (ATTR_RECALL_ON_DATA_ACCESS | ATTR_OFFLINE) or (is_dir and attrs & ATTR_RECALL_ON_OPEN):
+        return "online"
+    if attrs & ATTR_UNPINNED:
+        return "online"
+    return "local" if in_cloud(path) else None
 
 INVALID_NAME_CHARS = set('\\/:*?"<>|')
 RESERVED_NAMES = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}

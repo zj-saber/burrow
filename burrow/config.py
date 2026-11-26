@@ -75,6 +75,8 @@ def normalize_layout(layout: dict | None) -> dict:
         base["sort_column"] = layout["sort_column"]
     base["sort_desc"] = bool(layout.get("sort_desc", base["sort_desc"]))
     base["folders_first"] = bool(layout.get("folders_first", base["folders_first"]))
+    if layout.get("mode") in ("list", "columns", "thumbs", "river"):
+        base["mode"] = layout["mode"]            # a saved view also remembers list / columns / ...
     return base
 
 
@@ -98,7 +100,8 @@ DEFAULTS = {
     "preview_text": True,
     "text_syntax_colors": True,
     "preview_archives": True,
-    "preview_folders": True,        # a selected folder's contents in the preview (list view)
+    "preview_folders": True,
+    "space_quicklook": True,        # Space: Quick Look (off: Space plays the inspector's video)        # a selected folder's contents in the preview (list view)
     "preview_epub": True,
     "media_arrow_seek": True,
     "sidebar_places": True,
@@ -117,8 +120,7 @@ DEFAULTS = {
     "hover_strength": 45,           # hover highlight: 0 off ... 100 strong (Settings ▸ General)
     "columns_sizes": True,          # columns view: small sizes after names (folders via Everything)
     "view_mode": "list",            # new tabs open as "list", "columns", "thumbs" or "river"
-    "status_sort_toggle": True,     # status bar: Sort folders-first / mixed
-    "status_view_toggle": True,     # status bar: View list / columns
+    "status_view_toggle": True,     # status bar: the four view icons
     "status_icon_slider": True,     # status bar: icon size slider
     "status_auto_update": True,     # status bar: the Auto update icon
     "status_update_button": True,   # status bar: Update button when a new version is out

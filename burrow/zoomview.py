@@ -37,7 +37,6 @@ class _View(QGraphicsView):
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.wheel_zooms = True
 
     def wheelEvent(self, ev):
         """Mouse wheel and two-finger touchpad scrolling zoom (photos and PDFs), centred on the
@@ -376,7 +375,6 @@ class ZoomView(QWidget):
             self.page_lbl.setText(f"{self.page + 1} / {count}")
             self.b_prev.setEnabled(self.page > 0)
             self.b_next.setEnabled(self.page < count - 1)
-        self.view.wheel_zooms = self.kind == "image"
 
     def resizeEvent(self, ev):
         super().resizeEvent(ev)

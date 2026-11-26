@@ -144,7 +144,6 @@ class Sidebar(QTreeWidget):
         self.currentItemChanged.connect(self._current_moved)
         config.bookmarksChanged.connect(self.rebuild)
         tags.store().changed.connect(self.rebuild)
-        self._drive_sig = None
         self._current = None
         self._timer = QTimer(self)
         # Drives arriving/leaving come from DeviceWatcher (no polling). This slow check only

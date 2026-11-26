@@ -50,6 +50,12 @@ class CommandBar(QWidget):
         self.dupes_btn = self._button("duplicates", action=win.act_dupes)
         self.bulk_btn = self._button("bulk_rename", action=win.act_bulk_rename)
         self.folder_btn = self._button("auto_folder", action=win.act_folderize)
+        self._sep()
+        self.save_menu = QMenu(self)
+        self.save_menu.aboutToShow.connect(self._fill_save_menu)
+        self.save_btn = self._button("save_view", "Save view", menu=self.save_menu)
+        self.save_btn.setToolTip("Remember this view (list, columns, thumbnails or river, and its columns "
+                                 "and sort) for this folder, or for all folders")
         lay.addStretch(1)
         self._clip_files = False
         QGuiApplication.clipboard().dataChanged.connect(self._clipboard_changed)
@@ -122,12 +128,26 @@ class CommandBar(QWidget):
         ff = m.addAction("Folders first")
         ff.setCheckable(True)
         ff.setChecked(model.folders_first)
-        ff.triggered.connect(lambda on: (v.set_folders_first(on), self.win._sync_sort_mode()))
+        ff.triggered.connect(lambda on: (v.set_folders_first(on), self.win._sync_view_buttons()))
 
     def _sort(self, key, desc):
         v = self.win.view()
         order = Qt.SortOrder.DescendingOrder if desc else Qt.SortOrder.AscendingOrder
         v.tree.sortByColumn(COLUMNS.index(key), order)          # saved like a header click
+
+    def _fill_save_menu(self):
+        m, v = self.save_menu, self.win.view()
+        m.clear()
+        if v is None:
+            return
+        special = not v.path or is_special(v.path) or is_server(v.path)
+        here = m.addAction("Save view for this folder")
+        here.setEnabled(not special)
+        here.triggered.connect(lambda: v.save_view(False))
+        m.addAction("Save view for all folders").triggered.connect(lambda: v.save_view(True))
+        if v.own_layout:
+            m.addSeparator()
+            m.addAction("Forget this folder's view").triggered.connect(v.forget_folder_layout)
 
     def _fill_view_menu(self):
         m, w = self.view_menu, self.win
