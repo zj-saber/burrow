@@ -313,6 +313,8 @@ QStatusBar QToolButton#statusToggle {{ color: {c['dim']}; background: transparen
 QStatusBar QToolButton#statusToggle:hover {{ color: {c['text']}; border-color: {c['accent']}; }}
 QStatusBar QToolButton#statusToggle:checked {{ color: {c['accent']}; }}
 QStatusBar QSlider#iconSlider {{ margin: 0 2px; }}
+QStatusBar QCheckBox#statusCheck {{ color: {c['dim']}; padding: 0 6px; spacing: 5px; }}
+QStatusBar QCheckBox#statusCheck:hover {{ color: {c['text']}; }}
 QSlider#iconSlider::groove:horizontal {{ height: 3px; background: {c['border']}; border-radius: 1px; }}
 QSlider#iconSlider::sub-page:horizontal {{ background: {c['accent']}; border-radius: 1px; }}
 QSlider#iconSlider::handle:horizontal {{ width: 11px; height: 11px; margin: -4px 0; border-radius: 5px;

@@ -266,6 +266,8 @@ class SettingsDialog(QDialog):
         fb.addRow(check("status_icon_slider", "Icon size slider"))
         fb.addRow(check("status_storage_bar", "Storage pill (how full the drive is)"))
         fb.addRow(check("status_folder_button", "Auto folder button (folders for loose files)"))
+        fb.addRow(check("status_auto_update", "Auto update check mark"))
+        fb.addRow(check("status_update_button", "Update button when a new version is out"))
         side = QGroupBox("Sidebar sections")
         f = QFormLayout(side)
         f.addRow(check("sidebar_places", "Places (Home, Desktop, Documents…)"))
@@ -330,7 +332,7 @@ class SettingsDialog(QDialog):
 
         upd = QGroupBox("Updates")
         f = QFormLayout(upd)
-        f.addRow(check("check_updates", "Check for new versions automatically",
+        f.addRow(check("check_updates", "Auto update: check for a new version every time Burrow starts",
                        "Asks GitHub for the latest Burrow release. Nothing else is sent."))
         from . import __version__
         now = QPushButton("Check now")

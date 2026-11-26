@@ -116,10 +116,12 @@ DEFAULTS = {
     "status_view_toggle": True,     # status bar: View list / columns
     "status_icon_slider": True,     # status bar: icon size slider
     "status_folder_button": True,   # status bar: Auto folder (folders for loose files)
+    "status_auto_update": True,     # status bar: the Auto update check mark
+    "status_update_button": True,   # status bar: Update button when a new version is out
     "status_storage_bar": True,     # status bar: how full the drive is, as a skinny pill
     "drive_usage_bars": True,       # This PC: the same pill beside each drive
     "sidebar_eject": True,          # eject buttons next to USB drives, cards, DVDs
-    "check_updates": True,          # look for a new release on GitHub (every 12 h at most)
+    "check_updates": True,          # Auto update: check GitHub at every start (and every 12 h)
     "update_checked": 0,            # when that last happened (epoch seconds)
     "update_skip": "",              # a version the user chose to skip
     "pane_layout": None,            # split panes: nested layout with tabs per pane

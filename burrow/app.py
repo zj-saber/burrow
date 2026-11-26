@@ -286,7 +286,11 @@ def _startup_chores(win):
         from . import updater
         updater.cleanup()
         updater.sync_registered_version()
-    maybe_check_updates(win)
+    if win.config.get("check_updates"):          # Auto update: every start looks for a new version
+        import time
+        from . import updater
+        _last_attempt[0] = time.time()
+        updater.auto_check(win)
 
 
 UPDATE_EVERY = 12 * 3600          # automatic checks at most this often
@@ -658,6 +662,15 @@ class MainWindow(QMainWindow):
         self.update_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.update_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.update_btn.hide()
+        self.update_btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.update_btn.customContextMenuRequested.connect(self._update_btn_menu)
+        from PySide6.QtWidgets import QCheckBox
+        self.auto_update_chk = QCheckBox("Auto update")
+        self.auto_update_chk.setObjectName("statusCheck")
+        self.auto_update_chk.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.auto_update_chk.setToolTip("Check GitHub for a new Burrow every time it starts")
+        self.auto_update_chk.setChecked(bool(self.config.get("check_updates")))
+        self.auto_update_chk.toggled.connect(self._auto_update_toggled)
         self.usage_pill = UsagePill()
         self.usage_pill.hide()
         self.folder_btn = QToolButton()                # Tools ▸ Folders for loose files
@@ -688,7 +701,7 @@ class MainWindow(QMainWindow):
         right.setSpacing(4)
         right.addStretch(1)
         for wdg in (self.icon_small, self.icon_slider, self.icon_big, self.usage_pill, self.status_right,
-                    self.update_btn):
+                    self.auto_update_chk, self.update_btn):
             right.addWidget(wdg)
         g.addLayout(right, 0, 2)
         g.setColumnStretch(0, 1)
@@ -1473,6 +1486,12 @@ class MainWindow(QMainWindow):
         c = self.config
         self.view_mode_btn.setVisible(bool(c.get("status_view_toggle")))
         self.folder_btn.setVisible(bool(c.get("status_folder_button")))
+        self.auto_update_chk.setVisible(bool(c.get("status_auto_update")))
+        if self.auto_update_chk.isChecked() != bool(c.get("check_updates")):
+            self.auto_update_chk.blockSignals(True)
+            self.auto_update_chk.setChecked(bool(c.get("check_updates")))
+            self.auto_update_chk.blockSignals(False)
+        self.update_btn.setVisible(bool(c.get("status_update_button")) and getattr(self, "_update_info", None) is not None)
         for wdg in (self.icon_small, self.icon_slider, self.icon_big):
             wdg.setVisible(bool(c.get("status_icon_slider")))
         self.sidebar.drag_reorder = bool(c.get("sidebar_drag_reorder"))
@@ -2132,14 +2151,29 @@ class MainWindow(QMainWindow):
             if getattr(w, "_update_info", None) is None:
                 w.update_btn.clicked.connect(lambda _=False, w=w: w._open_update(w._update_info))
             w._update_info = info
-            w.update_btn.show()
+            w.update_btn.setVisible(bool(self.config.get("status_update_button")))
 
     def _open_update(self, info):
         from . import updater
-        updater.UpdateDialog(self, info).exec()
+        updater.UpdateDialog(self, info, start=True).exec()     # straight to the download
         if self.config.get("update_skip") == info["version"]:
             for w in WINDOWS:
                 w.update_btn.hide()
+
+    def _update_btn_menu(self, pos):
+        m = QMenu(self)
+        m.addAction("Hide this button").triggered.connect(self._hide_update_btn)
+        m.exec(self.update_btn.mapToGlobal(pos))
+
+    def _hide_update_btn(self):
+        self.config.set("status_update_button", False)       # back on in Settings ▸ Sidebar & list
+        self.statusBar().showMessage("Update button hidden. Settings ▸ Sidebar & list brings it back.", 6000)
+
+    def _auto_update_toggled(self, on: bool):
+        self.config.set("check_updates", on)
+        if on:
+            from . import updater
+            updater.auto_check(self)                         # look right away
 
     def _tool_paths(self):
         """Folders for the tools: the open folders of each pane (left/right for Compare)."""
@@ -2346,5 +2380,5 @@ def main():
     from .devwatch import DeviceWatcher
     app._devwatch = DeviceWatcher(app)
     app._devwatch.changed.connect(_drives_changed)
-    QTimer.singleShot(20000, lambda: _startup_chores(win))
+    QTimer.singleShot(5000, lambda: _startup_chores(win))
     return app.exec()

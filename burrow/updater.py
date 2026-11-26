@@ -186,7 +186,7 @@ def launch_installer(src: str):
 class UpdateDialog(QDialog):
     """Check, show what's new, download with progress, install and restart."""
 
-    def __init__(self, window, info: dict | None = None):
+    def __init__(self, window, info: dict | None = None, start: bool = False):
         super().__init__(window)
         self.win = window
         self.info = info
@@ -231,6 +231,9 @@ class UpdateDialog(QDialog):
         self.up.downloaded.connect(self._install)
         if info:
             self._show(info)
+            if start and can_install() and info.get("zip"):
+                from PySide6.QtCore import QTimer
+                QTimer.singleShot(0, self._go)       # the Update button means "update now"
         else:
             self.title.setText("Checking for updates…")
             self.sub.setText(f"You have Burrow {__version__}.")
