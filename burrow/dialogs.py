@@ -205,6 +205,19 @@ class SettingsDialog(QDialog):
         f.addRow(note("Mica and Acrylic are drawn by Windows itself, so they cost almost nothing. "
                       "They show while the window is active."))
         f.addRow("Date format:", self.date_fmt)
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QSlider
+        hov = QHBoxLayout()
+        self.hover = QSlider(Qt.Orientation.Horizontal)
+        self.hover.setRange(0, 100)
+        self._hover_was = int(config.get("hover_strength"))      # Cancel puts it back
+        self.hover.setValue(self._hover_was)
+        self.hover.setToolTip("How visible the highlight under the mouse is. All the way left turns it off.")
+        self.hover.valueChanged.connect(lambda v: config.set("hover_strength", v))     # see it as you drag
+        hov.addWidget(QLabel("Off"))
+        hov.addWidget(self.hover, 1)
+        hov.addWidget(QLabel("Strong"))
+        f.addRow("Hover highlight:", hov)
 
         behave = QGroupBox("Behavior")
         f = QFormLayout(behave)
@@ -389,6 +402,11 @@ class SettingsDialog(QDialog):
         p = QFileDialog.getExistingDirectory(self, "Folder for new tabs", self.new_tab.text() or os.path.expanduser("~"))
         if p:
             self.new_tab.setText(os.path.normpath(p))
+
+    def reject(self):
+        if self.config.get("hover_strength") != self._hover_was:     # undo the live preview
+            self.config.set("hover_strength", self._hover_was)
+        super().reject()
 
     def _save(self):
         """Store every field, then let the window apply what changed."""

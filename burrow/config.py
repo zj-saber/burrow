@@ -112,6 +112,7 @@ DEFAULTS = {
     "sidebar_drag_reorder": True,   # drag sidebar headings to reorder sections
     "icon_size": 16,                # list / columns icon size (slider at the bottom)
     "ctrl_wheel_icon_size": True,   # Ctrl+wheel over the list changes the icon size (like Explorer)
+    "hover_strength": 45,           # hover highlight: 0 off ... 100 strong (Settings ▸ General)
     "columns_sizes": True,          # columns view: small sizes after names (folders via Everything)
     "view_mode": "list",            # new tabs open as "list" or "columns"
     "status_sort_toggle": True,     # status bar: Sort folders-first / mixed
@@ -147,6 +148,7 @@ DEFAULTS = {
     "win_e": False,                 # Win+E opens Burrow (keyboard hook while Burrow runs)
     "run_in_background": False,     # tray icon, start with Windows, closing hides
     "show_menubar": False,
+    "command_bar": True,            # the button row above the address bar (chevron hides it)
     "bookmarks": [],
     "recent_servers": [],
     "sidebar_collapsed": [],

@@ -69,8 +69,6 @@ class RowDelegate(QStyledItemDelegate):
 
     def paint(self, painter, option, index):
         state = option.state
-        if state & _HOVER and not state & _SELECTED:
-            painter.fillRect(option.rect, self.hover)
         if state & _FOCUS:
             option.state = state & ~_FOCUS
         if self.size_col is not None and index.column() == self.size_col:
@@ -134,8 +132,6 @@ class NameDelegate(RowDelegate):
         if state & _SELECTED:
             group = QPalette.ColorGroup.Active if state & QStyle.StateFlag.State_Active else QPalette.ColorGroup.Inactive
             painter.fillRect(r.adjusted(r.width() - dots_w, 0, 0, 0), option.palette.color(group, QPalette.ColorRole.Highlight))
-        elif state & _HOVER:
-            painter.fillRect(r.adjusted(r.width() - dots_w, 0, 0, 0), self.hover)
         option.rect = r.adjusted(0, 0, -dots_w, 0)
         super().paint(painter, option, index)
         option.rect = r
@@ -173,6 +169,33 @@ class FileTree(QTreeView):
     def __init__(self, owner: "FolderView"):
         super().__init__(owner)
         self.owner = owner
+        self.hover_color = QColor(0, 0, 0, 0)       # set by the theme and the Settings slider
+        self._hover_row = -1
+
+    def drawRow(self, painter, option, index):
+        """The hovered row gets one rounded band across all its columns, then the row on top."""
+        if index.row() == self._hover_row and not self.selectionModel().isSelected(index):
+            theme.paint_hover(painter, option.rect, self.hover_color)
+        super().drawRow(painter, option, index)
+
+    def _set_hover(self, row: int):
+        if row == self._hover_row:
+            return
+        old, self._hover_row = self._hover_row, row
+        vp = self.viewport()
+        for r in (old, row):
+            if r >= 0:
+                rect = self.visualRect(self.model().index(r, 0))
+                vp.update(0, rect.top(), vp.width(), rect.height())
+
+    def mouseMoveEvent(self, ev):
+        idx = self.indexAt(ev.position().toPoint())
+        self._set_hover(idx.row() if idx.isValid() else -1)
+        super().mouseMoveEvent(ev)
+
+    def leaveEvent(self, ev):
+        self._set_hover(-1)
+        super().leaveEvent(ev)
 
     def wheelEvent(self, ev):
         if (ev.modifiers() & Qt.KeyboardModifier.ControlModifier and self.owner.icon_wheel_handler is not None
@@ -384,9 +407,10 @@ class FolderView(QWidget):
         self.tree.header().setStyleSheet(theme.header_qss(c))
         self.filter_edit.setStyleSheet(theme.field_qss(c))
         self.model.meta_color = QColor(c["dim"])
-        hover = QColor(c["hover"])
-        for d in (self.row_delegate, self.name_delegate):
-            d.hover = hover
+        self.tree.hover_color = theme.hover_color(c, int(self.config.get("hover_strength")))
+        if self.columns is not None:
+            self.columns.set_hover_color(self.tree.hover_color)
+        self.tree.viewport().update()
         self.set_icon_size(self.config.get("icon_size") or 16)
 
     def row_height(self) -> int:
@@ -530,6 +554,7 @@ class FolderView(QWidget):
             c.selectionModel().selectionChanged.connect(lambda *_: self.selectionChanged.emit())
             c.extra_actions = list(self.tree.actions())   # Ctrl+C, Del, F2... work in columns too
             c.set_show_sizes(bool(self.config.get("columns_sizes")), bool(self.config.get("everything_sizes")))
+            c.set_hover_color(self.tree.hover_color)
             self._lay.insertWidget(2, c, 1)
         if self.columns is not None:
             self.columns.setVisible(want)
@@ -909,6 +934,12 @@ class FolderView(QWidget):
 
     # ----- auto-fit: columns as wide as their widest item ---------------------------------
     def _settings_changed(self):
+        hover = theme.hover_color(theme.colors(), int(self.config.get("hover_strength")))
+        if hover != self.tree.hover_color:              # the Settings slider, live
+            self.tree.hover_color = hover
+            self.tree.viewport().update()
+            if self.columns is not None:
+                self.columns.set_hover_color(hover)
         if self.columns is not None:
             sizes = (bool(self.config.get("columns_sizes")), bool(self.config.get("everything_sizes")))
             if sizes != (self.columns.show_sizes, self.columns.folder_sizes_on):

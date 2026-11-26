@@ -39,6 +39,11 @@ class _RowDelegate(QStyledItemDelegate):
         """The row (no folder arrows: the icon says it), an optional small size at its end, and
         the clipboard tint. With sizes off this is one attribute check more than a plain row."""
         view = self.parent()
+        from PySide6.QtWidgets import QStyle
+        if option.state & QStyle.StateFlag.State_MouseOver and not option.state & QStyle.StateFlag.State_Selected:
+            from . import theme
+            theme.paint_hover(painter, option.rect, getattr(view, "hover_color", QColor(0, 0, 0, 0)))
+            option.state &= ~QStyle.StateFlag.State_MouseOver          # the style's own hover would double it
         size = view.size_for(index) if getattr(view, "show_sizes", False) else None
         if size is None:
             super().paint(painter, option, index)
@@ -208,8 +213,15 @@ class ColumnsView(QColumnView):
         col.setViewportMargins(0, 0, 1, 0)       # 1px of window color between columns
         col.setIconSize(self.iconSize())
         col.addActions(self.extra_actions)
+        col.setMouseTracking(True)
+        col.viewport().setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self._ask_folder_sizes(index)
         return col
+
+    def set_hover_color(self, color):
+        self.hover_color = color
+        for col in self.findChildren(_Column):
+            col.viewport().update()
 
     # ----- sizes next to names -----------------------------------------------------------
     def set_show_sizes(self, on: bool, folders: bool = True):

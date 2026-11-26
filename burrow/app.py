@@ -17,6 +17,7 @@ from PySide6.QtCore import QItemSelection, QItemSelectionModel
 
 from . import dialogs, fileops, foldercolor, integration, tags, theme
 from .chrome import AddressArea, UsagePill
+from .toolbar import CommandBar
 from PySide6.QtCore import QPoint, QRect
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QSplitter
@@ -121,6 +122,7 @@ class Pane(QWidget):
         bar.installEventFilter(win)
         bar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         bar.customContextMenuRequested.connect(lambda pos: win._tab_menu(self, pos))
+        bar.tabBarClicked.connect(lambda i: win._tab_clicked(self, i))
         ts.addWidget(bar, 0, Qt.AlignmentFlag.AlignBottom)
         self.plus_btn = QToolButton()
         self.plus_btn.setObjectName("plus")
@@ -485,6 +487,7 @@ class MainWindow(QMainWindow):
         self.act_move_to = T("Move to folder…", lambda: self.transfer_to_dialog(True))
         self.act_copy_path = T("Copy path", self.copy_path, "Ctrl+Shift+C")
         self.act_rename = T("Rename", self.rename_selected, "F2")
+        self.act_extract = T("Extract", self.extract_selected, "Ctrl+Shift+X")
         self.act_delete = T("Delete", lambda: self.delete(False), "Del")
         self.act_delete_perm = T("Delete permanently", lambda: self.delete(True), "Shift+Del")
         self.act_select_all = T("Select all", lambda: self.view().select_all(), "Ctrl+A")
@@ -542,7 +545,12 @@ class MainWindow(QMainWindow):
         self.navbar = QWidget()
         self.navbar.setObjectName("navbar")
         self.navbar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        nb = QHBoxLayout(self.navbar)
+        rows = QVBoxLayout(self.navbar)
+        rows.setContentsMargins(0, 0, 0, 0)
+        rows.setSpacing(0)
+        addr_row = QWidget(self.navbar)
+        rows.addWidget(addr_row)
+        nb = QHBoxLayout(addr_row)
         nb.setContentsMargins(8, 6, 8, 6)
         nb.setSpacing(2)
         for a in (self.act_back, self.act_forward, self.act_up, self.act_refresh):
@@ -561,6 +569,11 @@ class MainWindow(QMainWindow):
         completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.address.setCompleter(completer)
         nb.addWidget(self.address_area, 1)
+        self.bar_toggle = QToolButton(self.navbar)       # hides / shows the command bar
+        self.bar_toggle.setAutoRaise(True)
+        self.bar_toggle.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.bar_toggle.clicked.connect(lambda: self.set_command_bar(not self.command_bar.isVisible()))
+        nb.addWidget(self.bar_toggle)
         nb.addSpacing(8)
         view_label = QLabel("View")
         view_label.setObjectName("viewlabel")
@@ -622,6 +635,11 @@ class MainWindow(QMainWindow):
         self.act_sidebar.setToolTip("Sidebar (Alt+B)")
         self.addAction(self.act_sidebar)
         self.act_menubar = self._action("Menu bar", self._toggle_menubar, checkable=True)
+        self.act_command_bar = self._action("Toolbar", self.set_command_bar, checkable=True)
+        self.act_command_bar.setChecked(bool(self.config.get("command_bar")))
+        self.command_bar = CommandBar(self)
+        self.command_bar.setVisible(self.act_command_bar.isChecked())
+        self.navbar.layout().insertWidget(0, self.command_bar)
         nb.addWidget(self._tool_button(self.act_sidebar, self.navbar))
         nb.addWidget(self._tool_button(self.act_inspector, self.navbar))
         self.menu_btn = QToolButton(self.navbar)
@@ -762,6 +780,7 @@ class MainWindow(QMainWindow):
                   self.act_map_drive, self.act_unmap_drive, None, self.act_default_fm, self.act_win_e, None,
                   self.act_updates, self.act_settings):
             t.addSeparator() if a is None else t.addAction(a)
+        v.addAction(self.act_command_bar)
         v.addAction(self.act_menubar)
 
         # The same menus behind one button, so the menu bar can stay hidden.
@@ -862,6 +881,8 @@ class MainWindow(QMainWindow):
         self.splitter.setStyleSheet(f"QSplitter::handle {{ background: {c['border']}; }}")
         self.drop_area.style_overlay(c['accent'])
         self.navbar.setStyleSheet(theme.navbar_qss(c))
+        self.command_bar.apply_theme()
+        self._sync_bar_toggle()
         self.statusBar().setStyleSheet(theme.statusbar_qss(c))
         self.inspector.setStyleSheet(theme.inspector_qss(c))
         self.inspector.media.apply_theme()
@@ -1049,6 +1070,14 @@ class MainWindow(QMainWindow):
             if p.isAncestorOf(new):
                 self.set_active_pane(p)
                 return
+
+    def _tab_clicked(self, p, i):
+        """A click on any tab, even the one already showing, makes its pane the active one and
+        puts the keyboard in its file list (the tab bar itself never takes focus)."""
+        if i < 0:
+            return
+        self.set_active_pane(p)
+        QTimer.singleShot(0, lambda: self.view().focus_list() if self.view() is not None else None)
 
     def _pane_changed(self, p):
         if p is self.active_pane:
@@ -1323,6 +1352,7 @@ class MainWindow(QMainWindow):
     def _on_view_selection(self, v):
         if v is self.view():
             self._update_status()
+            self.command_bar.sync()
             self.inspector_timer.start()
 
     def _sync_location(self):
@@ -1338,6 +1368,7 @@ class MainWindow(QMainWindow):
         self.act_bookmark.setText("Remove bookmark" if marked else "Bookmark this folder")
         self.act_bookmark.setEnabled(not places.is_special(v.path))
         self.sidebar.highlight(v.path)
+        self.command_bar.sync()
         self.setWindowTitle(f"{title_for(v.path)} — {APP_NAME}")
         self.status_right.setText("")
         self.usage_pill.set_usage(None, None)
@@ -1735,6 +1766,33 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, APP_NAME, "The archive couldn't be processed:\n\n" + "\n".join(errors[:8]))
             self.refresh_view()
         places.run_async(fn, done)
+
+    def can_extract(self, entries) -> bool:
+        """Whether every selected item is an archive and an extractor is installed."""
+        from . import extract
+        return bool(entries) and all(not e.is_dir and extract.is_archive(e.path) for e in entries) \
+            and extract.tool() is not None
+
+    def extract_selected(self):
+        """Ctrl+Shift+X / the Extract button: each selected archive into its own folder."""
+        es = self._selected()
+        if self.can_extract(es):
+            self.run_extract([e.path for e in es], True)
+        elif es:
+            self.statusBar().showMessage("Select an archive (zip, 7z, rar…) to extract", 4000)
+
+    def set_command_bar(self, on: bool):
+        """Show or hide the button row above the address bar (the chevron, or View ▸ Toolbar)."""
+        self.config.set("command_bar", bool(on))
+        for w in WINDOWS:
+            w.command_bar.setVisible(bool(on))
+            w.act_command_bar.setChecked(bool(on))
+            w._sync_bar_toggle()
+
+    def _sync_bar_toggle(self):
+        on = self.command_bar.isVisibleTo(self.navbar)
+        self.bar_toggle.setIcon(theme.icon("chevron_up" if on else "chevron_down"))
+        self.bar_toggle.setToolTip("Hide the toolbar" if on else "Show the toolbar")
 
     def run_extract(self, paths, to_folder):
         from . import extract

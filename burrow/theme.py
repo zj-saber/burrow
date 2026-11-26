@@ -190,6 +190,12 @@ GLYPHS = {
     "settings": "", "inspector": "", "menu": "", "add": "",
     "sidebar": "", "close": "", "chevron": "", "chevron_down": "",
     "play": "", "pause": "", "volume": "", "mute": "",
+    "chevron_up": "",
+    # command bar
+    "new": "", "new_folder": "", "new_file": "", "cut": "", "copy": "",
+    "paste": "", "rename": "", "extract": "", "delete": "", "sort": "",
+    "view": "", "filter": "", "compare": "", "duplicates": "",
+    "bulk_rename": "", "auto_folder": "",
 }
 _icon_font_family: str | None = None
 _icon_cache: dict = {}
@@ -277,6 +283,9 @@ def navbar_qss(c):
 #navbar QComboBox:hover {{ border: 1px solid {c['border']}; }}
 #navbar QComboBox::drop-down {{ border: none; width: 16px; }}
 #navbar QLabel#viewlabel {{ color: {c['dim']}; }}
+#cmdbar QToolButton {{ padding: 5px 7px; }}
+#cmdbar QToolButton:disabled {{ color: {c['dim']}; }}
+#cmdsep {{ background: {c['border']}; }}
 """
 
 
@@ -343,6 +352,27 @@ def inspector_qss(c):
 #inspector QPlainTextEdit {{ background: {c['base']}; border: 1px solid {c['border']}; border-radius: 8px;
                               padding: 4px; color: {c['text']}; }}
 """
+
+
+# ----- hover highlight (FilePilot-style rounded band) ---------------------------------
+def hover_color(c: dict, strength: int) -> QColor:
+    """The hover band: the text color at low opacity, so it lightens dark themes and darkens
+    light ones. strength 0 (off) to 100 (strong)."""
+    col = QColor(c["text"])
+    col.setAlpha(round(max(0, min(100, strength)) * 0.7))     # 0..70 of 255
+    return col
+
+
+def paint_hover(p: QPainter, rect, color: QColor):
+    """A soft rounded band, inset a little from the row's edges."""
+    if color.alpha() == 0:
+        return
+    p.save()
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(color)
+    p.drawRoundedRect(QRectF(rect).adjusted(3, 1, -3, -1), 6, 6)
+    p.restore()
 
 
 # ----- skinny storage pill (status bar, This PC) ------------------------------------

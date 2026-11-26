@@ -272,24 +272,17 @@ class MediaPreview(QWidget):
         from PySide6.QtMultimedia import QMediaPlayer
         if status == QMediaPlayer.MediaStatus.LoadedMedia and self._poster_pending:
             self._poster_pending = False
-            # Poster frame without playing: like Explorer thumbnails, take a frame ~8% in
-            # (videos often open on black), muted, and pause as soon as it is decoded.
+            # Poster frame like Explorer thumbnails: a frame ~8% in (videos often open on
+            # black). pause() from the stopped state decodes just that one frame: nothing
+            # plays, no sound, no motion.
             dur = self._player.duration()
             self._poster_ms = int(min(dur * 0.08, 60000)) if dur > 10000 else 0
-            self._audio.setMuted(True)
             if self._poster_ms:
                 self._player.setPosition(self._poster_ms)
-            self._player.play()
-            QTimer.singleShot(150, self._end_poster)
-
-    def _end_poster(self):
-        if self._player is None or self._path is None:
-            return
-        self._player.pause()
-        self._at_poster = True
-        self._audio.setMuted(self.mute_btn.isChecked())
-        self.seek.setValue(0)
-        self.time.setText(f"0:00 / {fmt_time(self._player.duration())}")
+            self._player.pause()
+            self._at_poster = True
+            self.seek.setValue(0)
+            self.time.setText(f"0:00 / {fmt_time(self._player.duration())}")
 
     def _fit_video(self, res: QSize):
         # the video now fills the inspector's preview area (its height is set by the
