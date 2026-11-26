@@ -6,7 +6,7 @@ A tabbed file manager for Windows, written in Python with Qt (PySide6).
 
 - **Browsing**: address bar with path completion (`%USERPROFILE%` and `This PC` work), back/forward/up (also on mouse buttons), natural sort ("file2" comes before "file10"), folders first, and show/hide hidden files.
 - **Mixed or folders-first sorting**: the *Sort* switch at the bottom right puts folders on top, or sorts files, folders and archives together purely by the column you sorted on (FilePilot-style). It applies to every folder.
-- **Columns view** (optional, like macOS Finder or One Commander): *View: list / columns* at the bottom right, View ▸ Columns view, or Ctrl+Shift+L. Each folder you pick opens in a new column to the right. This PC, Network and tag pages stay a list. Columns have no scroll bars, for a compact look (the wheel, Shift+wheel and arrow keys scroll).
+- **Columns view** (optional, like macOS Finder or One Commander): the columns icon at the bottom (next to list, thumbnails and river), View ▸ Columns view, or Ctrl+Shift+L. Each folder you pick opens in a new column to the right. This PC, Network and tag pages stay a list. Columns have no scroll bars, for a compact look (the wheel, Shift+wheel and arrow keys scroll).
 - **Icon size slider** at the bottom right: 16 to 64 px icons in the list and columns, for every tab and window, remembered.
 - **Themes**: Burrow, Primary, Greyscale, Sepia, OLED black and Calm (low contrast, little blue light), each in light and dark.
 - **Window material** (Windows 11): Mica, Mica Alt or Acrylic behind the window, with a light/medium/strong tint. Windows draws it, so it costs almost nothing.
