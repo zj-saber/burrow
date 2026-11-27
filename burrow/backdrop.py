@@ -12,7 +12,7 @@ DWMWA_SYSTEMBACKDROP_TYPE = 38
 KINDS = {"none": 1, "mica": 2, "acrylic": 3, "mica_alt": 4}
 NAMES = {"none": "None (solid)", "mica": "Mica (subtle, tinted by the wallpaper)",
          "mica_alt": "Mica Alt (stronger tint)", "acrylic": "Acrylic (frosted glass)"}
-TINTS = {"light": 0x70, "medium": 0xA8, "strong": 0xD8}     # alpha of the theme colors on top
+TINTS = {"clear": 0x40, "light": 0x70, "medium": 0xA8, "strong": 0xD8}     # alpha of the theme colors on top
 
 
 class _MARGINS(ctypes.Structure):

@@ -193,7 +193,8 @@ class SettingsDialog(QDialog):
             self.backdrop.addItem(label, data)
         self.backdrop.setCurrentIndex(max(self.backdrop.findData(config.get("backdrop")), 0))
         self.backdrop_tint = QComboBox()
-        for label, data in [("Light (more see-through)", "light"), ("Medium", "medium"), ("Strong (more solid)", "strong")]:
+        for label, data in [("Clear (most see-through)", "clear"), ("Light", "light"), ("Medium", "medium"),
+                            ("Strong (more solid)", "strong")]:
             self.backdrop_tint.addItem(label, data)
         self.backdrop_tint.setCurrentIndex(max(self.backdrop_tint.findData(config.get("backdrop_tint")), 0))
         if not _bd.supported():

@@ -464,6 +464,9 @@ class DirModel(QAbstractTableModel):
             return lambda e: (e.ext, e.nkey)
         if col == "attrs":
             return lambda e: (e.attrs, e.nkey)
+        if col == "status":                      # online-only, on this device, always kept
+            rank = {"online": 1, "local": 2, "pinned": 3}
+            return lambda e: (rank.get(cloud_state(e.path, e.attrs, e.is_dir), 0), e.nkey)
         return lambda e: e.nkey
 
     def _sort_entries(self):
@@ -545,6 +548,9 @@ class DirModel(QAbstractTableModel):
             return Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         elif role == Qt.ItemDataRole.ToolTipRole and col == "name":
             return e.path
+        elif role == Qt.ItemDataRole.ToolTipRole and col == "status":
+            st = cloud_state(e.path, e.attrs, e.is_dir) if not e.is_drive else None
+            return CLOUD_STATES.get(st) if st else None
         elif role == Qt.ItemDataRole.ForegroundRole:
             if e.hidden:
                 return self._dim

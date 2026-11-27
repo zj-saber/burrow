@@ -120,9 +120,22 @@ _STUDIO = {      # clean and warm-neutral: paper white, hairline borders, a soft
     },
 }
 
-PALETTES = {"burrow": _BURROW, "studio": _STUDIO, "primary": _PRIMARY, "greyscale": _GREYSCALE, "sepia": _SEPIA,
+_FOREST = {      # matches the forest green folder icon: light green by day, deep green at night
+    "light": {
+        "window": "#e4efe1", "base": "#f3f9f1", "panel": "#e9f2e6", "text": "#1c2a20",
+        "dim": "#5d7262", "border": "#cfe0cb", "accent": "#367d4c", "select": "#c9e3c9",
+        "select_inactive": "#d9e8d6", "hover": "#e9f3e6", "chip": "#d6e7d2", "seltext": "#163a22",
+    },
+    "dark": {
+        "window": "#152019", "base": "#111a14", "panel": "#17231b", "text": "#dbe7dd",
+        "dim": "#89a08f", "border": "#233329", "accent": "#4f9e68", "select": "#21452e",
+        "select_inactive": "#1f3027", "hover": "#1a271f", "chip": "#1e2c23", "seltext": "#f2fbf3",
+    },
+}
+
+PALETTES = {"burrow": _BURROW, "forest": _FOREST, "studio": _STUDIO, "primary": _PRIMARY, "greyscale": _GREYSCALE, "sepia": _SEPIA,
             "oled": _OLED, "calm": _CALM}
-PALETTE_NAMES = {"burrow": "Burrow (cool blue)", "studio": "Studio (clean, warm neutral)", "primary": "Primary (warm, inspired by the Obsidian theme)",
+PALETTE_NAMES = {"burrow": "Burrow (cool blue)", "forest": "Forest (light green / deep green)", "studio": "Studio (clean, warm neutral)", "primary": "Primary (warm, inspired by the Obsidian theme)",
                  "greyscale": "Greyscale", "sepia": "Sepia", "oled": "OLED black (always dark)",
                  "calm": "Calm (easy on the eyes)"}
 _current: dict = dict(_BURROW["light"], name="light", palette="burrow")

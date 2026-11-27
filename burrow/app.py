@@ -395,8 +395,14 @@ class MainWindow(QMainWindow):
         config.presetsChanged.connect(self._sync_preset_combo)
         config.bookmarksChanged.connect(self._sync_location)
         tags.store().changed.connect(self._tags_changed)
-        config.bookmarkAdded.connect(lambda p: self._mirror_bookmark(p, True))
         config.bookmarkRemoved.connect(lambda p: self._mirror_bookmark(p, False))
+        # any change to the bookmarks (added, moved, renamed) is mirrored to Explorer: its pins
+        # follow the bookmarks and their order, a moment after the last change
+        self._qa_timer = QTimer(self)
+        self._qa_timer.setSingleShot(True)
+        self._qa_timer.setInterval(1200)
+        self._qa_timer.timeout.connect(self.sync_quick_access)
+        config.bookmarksChanged.connect(self._qa_timer.start)
         self._qa_on = bool(config.get("quick_access_sync"))
         config.settingsChanged.connect(self._quick_access_switch)
 
@@ -2311,13 +2317,15 @@ class MainWindow(QMainWindow):
         places.run_async(lambda: fn(path), lambda _res: None)
 
     def sync_quick_access(self):
-        """Every bookmark pinned in Explorer's Quick Access (at start, and when the switch goes on):
-        bookmarks made before, or pins removed in Explorer, come back. Nothing is unpinned."""
+        """Explorer's Quick Access mirrors the bookmarks (at start, when the switch goes on, and
+        after any change): every bookmark pinned, in the bookmarks' order. Other pins stay."""
         if not self.config.get("quick_access_sync"):
             return
+        if WINDOWS and self is not WINDOWS[0]:
+            return                                   # one window does it for all
         paths = [b["path"] for b in self.config.bookmarks() if not places.is_special(b["path"])]
         if paths:
-            places.run_async(lambda: integration.sync_quick_access(paths), lambda _res: None)
+            places.run_async(lambda: integration.sync_quick_access(paths, order=True), lambda _res: None)
 
     def _quick_access_switch(self):
         on = bool(self.config.get("quick_access_sync"))

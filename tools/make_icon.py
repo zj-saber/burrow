@@ -1,19 +1,17 @@
 """Draw Burrow's app icon and write a multi-size .ico (PNG-compressed entries).
 
-The mark (option B, "Warm"): a cream folder on an espresso tile, with a rounded "burrow" opening tunnelled into its
-front, lit from the top. Large sizes get depth (gradients, a soft shadow, a highlight);
-16-24 px are drawn simpler and bolder so they stay crisp in the taskbar and title bar.
+The mark: a minimal forest green folder (flat, two tones, no tile), matching the Forest colors.
 
 Usage: python tools/make_icon.py assets/burrow.ico [preview.png]
 """
 import struct
 import sys
 
-from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QPointF, QRectF, Qt
-from PySide6.QtGui import (QColor, QGuiApplication, QImage, QLinearGradient, QPainter,
-                           QPainterPath, QRadialGradient)
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QRectF, Qt
+from PySide6.QtGui import QColor, QGuiApplication, QImage, QPainter, QPainterPath
 
 SIZES = [16, 20, 24, 32, 40, 48, 64, 96, 128, 256]
+BACK, FRONT = "#265c3a", "#367d4c"     # forest green: back and tab, front
 
 
 def _rounded(x, y, w, h, r):
@@ -23,56 +21,19 @@ def _rounded(x, y, w, h, r):
 
 
 def draw(p: QPainter, size: int):
-    """B · Warm: espresso tile, cream folder, dark arched doorway (matches the Primary theme)."""
+    """A minimal forest green folder: flat, two tones (a darker back and tab, a lighter front),
+    no tile. Tiny sizes get a slightly bigger, bolder shape so they stay crisp in the taskbar."""
     small = size <= 24
     s = size / 256.0
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
     p.setPen(Qt.PenStyle.NoPen)
-
-    # tile: warm brown to espresso, with a soft top-left glow on larger sizes
-    inset = 6 if small else 10
-    tile = _rounded(inset * s, inset * s, (256 - 2 * inset) * s, (256 - 2 * inset) * s, 58 * s)
-    g = QLinearGradient(QPointF(0, 0), QPointF(size, size))
-    g.setColorAt(0.0, QColor("#7a5a40"))
-    g.setColorAt(0.55, QColor("#4f3b2b"))
-    g.setColorAt(1.0, QColor("#2e261f"))
-    p.fillPath(tile, g)
-    if not small:
-        glow = QRadialGradient(QPointF(80 * s, 36 * s), 200 * s)
-        glow.setColorAt(0.0, QColor(255, 240, 220, 60))
-        glow.setColorAt(1.0, QColor(255, 240, 220, 0))
-        p.fillPath(tile, glow)
-
-    # folder geometry (256-space); bolder and larger at small sizes
-    fx, fw, back_y, front_y, bottom = (34, 188, 56, 96, 206) if small else (50, 156, 70, 104, 196)
-    back = _rounded(fx * s, (back_y + 12) * s, fw * s, (bottom - back_y - 12) * s, 16 * s).united(
-        _rounded(fx * s, back_y * s, 66 * s, 34 * s, 12 * s))
-    p.fillPath(back, QColor("#cfb696"))
-
-    if not small:   # soft shadow under the front panel
-        for i, a in enumerate((34, 22, 12)):
-            sh = _rounded((fx - 1) * s, (front_y + 6 + i * 3) * s, (fw + 2) * s, (bottom - front_y) * s, 18 * s)
-            p.fillPath(sh, QColor(30, 18, 8, a))
-
-    front = _rounded(fx * s, front_y * s, fw * s, (bottom - front_y) * s, 18 * s)
-    fg = QLinearGradient(QPointF(0, front_y * s), QPointF(0, bottom * s))
-    fg.setColorAt(0.0, QColor("#fbf8f4"))
-    fg.setColorAt(1.0, QColor("#e4d7c3"))
-    p.fillPath(front, fg)
-
-    # the burrow: an arched doorway sitting on the bottom edge of the front panel
-    cx, hw = 128, (42 if small else 30)
-    top = 124 if small else 138
-    arch = QPainterPath()
-    arch.moveTo((cx - hw) * s, bottom * s)
-    arch.lineTo((cx - hw) * s, (top + hw) * s)
-    arch.arcTo(QRectF((cx - hw) * s, top * s, 2 * hw * s, 2 * hw * s), 180, -180)
-    arch.lineTo((cx + hw) * s, bottom * s)
-    arch.closeSubpath()
-    ag = QLinearGradient(QPointF(0, top * s), QPointF(0, bottom * s))
-    ag.setColorAt(0.0, QColor("#2a2018"))
-    ag.setColorAt(1.0, QColor("#593e22"))
-    p.fillPath(arch.intersected(front), ag)
+    fx, fw = (14, 228) if small else (22, 212)
+    back_y, front_y, bottom = (26, 70, 230) if small else (32, 74, 224)
+    tab_w = 92 if small else 86
+    back = _rounded(fx * s, (back_y + 14) * s, fw * s, (bottom - back_y - 14) * s, 22 * s).united(
+        _rounded(fx * s, back_y * s, tab_w * s, 40 * s, 16 * s))
+    p.fillPath(back, QColor(BACK))
+    p.fillPath(_rounded(fx * s, front_y * s, fw * s, (bottom - front_y) * s, 24 * s), QColor(FRONT))
 
 
 def render(size: int) -> QImage:

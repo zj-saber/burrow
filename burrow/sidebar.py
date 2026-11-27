@@ -19,6 +19,7 @@ INDEX_ROLE = Qt.ItemDataRole.UserRole + 2
 SECTION_ROLE = Qt.ItemDataRole.UserRole + 3   # stable id of a section, for remembering collapse
 EJECT_ROLE = Qt.ItemDataRole.UserRole + 4     # drive rows with an eject button
 SECTION_MIME = "application/x-burrow-sidebar-section"
+BOOKMARK_MIME = "application/x-burrow-bookmark"
 EJECT_W = 22                                  # the eject button at a row's right end
 DEFAULT_ORDER = ["bookmarks", "places", "cloud", "tags", "pc", "network"]
 
@@ -286,6 +287,28 @@ class Sidebar(QTreeWidget):
             bottom = self.visualItemRect(tail).bottom()
         return None, bottom
 
+    def _bookmark_items(self) -> list:
+        for i in range(self.topLevelItemCount()):
+            top = self.topLevelItem(i)
+            if top.data(0, KIND_ROLE) == "bookmarks":
+                return [top.child(j) for j in range(top.childCount())
+                        if top.child(j).data(0, KIND_ROLE) == "bookmark"]
+        return []
+
+    def _bookmark_slot(self, y: int):
+        """(bookmark index to insert before, y of the line), or None outside the bookmarks."""
+        items = self._bookmark_items()
+        if not items or not items[0].parent().isExpanded():
+            return None
+        first, last = self.visualItemRect(items[0]), self.visualItemRect(items[-1])
+        if y < first.top() - first.height() or y > last.bottom() + last.height():
+            return None
+        for i, it in enumerate(items):
+            r = self.visualItemRect(it)
+            if y < r.center().y():
+                return i, r.top()
+        return len(items), last.bottom()
+
     def rebuild_soon(self):
         """Coalesce rebuilds asked for in one go (startup, theme + switches)."""
         if not getattr(self, "_rebuild_pending", False):
@@ -395,6 +418,8 @@ class Sidebar(QTreeWidget):
                 return
             if self.drag_reorder and it is not None and it.parent() is None and it.data(0, SECTION_ROLE):
                 self._press = (ev.position().toPoint(), it.data(0, SECTION_ROLE))
+            elif it is not None and it.data(0, KIND_ROLE) == "bookmark":
+                self._press = (ev.position().toPoint(), ("bookmark", it.data(0, INDEX_ROLE)))
             # the chevron at the start of a heading toggles it, even on link headings
             if (it is not None and it.parent() is None and it.data(0, SECTION_ROLE)
                     and ev.position().x() < self.visualItemRect(it).left() + 22):
@@ -472,11 +497,15 @@ class Sidebar(QTreeWidget):
             key = self._press[1]
             self._press = None
             md = QMimeData()
-            md.setData(SECTION_MIME, key.encode())
+            if isinstance(key, tuple):               # a bookmark: drag it up or down the list
+                md.setData(BOOKMARK_MIME, str(key[1]).encode())
+                it = self._bookmark_items()[key[1]] if 0 <= key[1] < len(self._bookmark_items()) else None
+            else:
+                md.setData(SECTION_MIME, key.encode())
+                it = next((self.topLevelItem(i) for i in range(self.topLevelItemCount())
+                           if self.topLevelItem(i).data(0, SECTION_ROLE) == key), None)
             drag = QDrag(self)
             drag.setMimeData(md)
-            it = next((self.topLevelItem(i) for i in range(self.topLevelItemCount())
-                       if self.topLevelItem(i).data(0, SECTION_ROLE) == key), None)
             if it is not None:
                 r = self.visualItemRect(it)
                 drag.setPixmap(self.viewport().grab(r))
@@ -538,6 +567,7 @@ class Sidebar(QTreeWidget):
             idx = it.data(0, INDEX_ROLE)
             m.addSeparator()
             m.addAction("Rename bookmark…").triggered.connect(lambda: self._rename(idx, it.text(0)))
+            m.addAction("Drag a bookmark to reorder").setEnabled(False)
             up = m.addAction("Move up")
             up.setEnabled(idx > 0)
             up.triggered.connect(lambda: self.config.move_bookmark(idx, -1))
@@ -597,7 +627,8 @@ class Sidebar(QTreeWidget):
         return ("transfer", paths, target)
 
     def dragEnterEvent(self, ev):
-        if ev.mimeData().hasFormat(SECTION_MIME) and ev.source() is self:
+        if (ev.mimeData().hasFormat(SECTION_MIME) or ev.mimeData().hasFormat(BOOKMARK_MIME)) \
+                and ev.source() is self:
             ev.acceptProposedAction()
         elif self._paths(ev.mimeData()):
             ev.acceptProposedAction()
@@ -610,7 +641,19 @@ class Sidebar(QTreeWidget):
         super().dragLeaveEvent(ev)
 
     def dragMoveEvent(self, ev):
-        """Highlight the drop target (or the reorder line for a heading)."""
+        """Highlight the drop target (or the reorder line for a heading or a bookmark)."""
+        if ev.mimeData().hasFormat(BOOKMARK_MIME):
+            slot = self._bookmark_slot(int(ev.position().y()))
+            y = slot[1] if slot else None
+            if y != self._drop_y:
+                self._drop_y = y
+                self.viewport().update()
+            if slot:
+                ev.setDropAction(Qt.DropAction.MoveAction)
+                ev.accept()
+            else:
+                ev.ignore()
+            return
         if ev.mimeData().hasFormat(SECTION_MIME):
             _before, y = self._drop_slot(int(ev.position().y()))
             if y != self._drop_y:
@@ -631,7 +674,19 @@ class Sidebar(QTreeWidget):
         ev.accept()
 
     def dropEvent(self, ev):
-        """Finish a drop: transfer files, add bookmarks or move a section."""
+        """Finish a drop: transfer files, add bookmarks, move a section or a bookmark."""
+        if ev.mimeData().hasFormat(BOOKMARK_MIME):
+            slot = self._bookmark_slot(int(ev.position().y()))
+            self._drop_y = None
+            self.viewport().update()
+            if not slot:
+                ev.ignore()
+                return
+            src = int(bytes(ev.mimeData().data(BOOKMARK_MIME)).decode())
+            ev.setDropAction(Qt.DropAction.MoveAction)
+            ev.accept()
+            QTimer.singleShot(0, lambda: self.config.place_bookmark(src, slot[0]))
+            return
         if ev.mimeData().hasFormat(SECTION_MIME):
             key = bytes(ev.mimeData().data(SECTION_MIME)).decode()
             before, _y = self._drop_slot(int(ev.position().y()))

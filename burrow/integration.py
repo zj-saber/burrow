@@ -217,19 +217,57 @@ def pin_to_quick_access(path: str):
     sync_quick_access([path])
 
 
-def sync_quick_access(paths: list[str]):
-    """Pin every one of these folders in Explorer's Quick Access that isn't pinned yet (one
-    PowerShell run for all). Never unpins anything; missing folders are skipped. Off-thread."""
+_QA_SYNC = r"""
+$sh = New-Object -ComObject Shell.Application
+$qa = $sh.Namespace('QA_PATH')
+function Key($p) { $p.TrimEnd([char]92).ToLower() }
+function Pinned { @($qa.Items() | Where-Object { $_.ExtendedProperty('System.Home.IsPinned') } | ForEach-Object { Key $_.Path }) }
+$want = @(WANTED | Where-Object { Test-Path -LiteralPath $_ })
+$keys = @($want | ForEach-Object { Key $_ })
+$pinned = Pinned
+$have = @($pinned | Where-Object { $keys -contains $_ })
+if (ORDER) {
+  $i = 0
+  while ($i -lt $have.Count -and $have[$i] -eq $keys[$i]) { $i++ }
+  if ($i -lt $have.Count) {
+    $redo = @($keys[$i..($keys.Count - 1)])
+    for ($j = $i; $j -lt $keys.Count; $j++) {
+      if ($pinned -contains $keys[$j]) {
+        # a fresh view each time: after one unpin, the old one no longer acts
+        (New-Object -ComObject Shell.Application).Namespace('QA_PATH').Items() |
+          Where-Object { (Key $_.Path) -eq $keys[$j] } | ForEach-Object { $_.InvokeVerb('unpinfromhome') }
+        Start-Sleep -Milliseconds 150
+      }
+    }
+    for ($t = 0; $t -lt 40; $t++) {           # Explorer unpins in the background: wait for it
+      $left = @(Pinned | Where-Object { $redo -contains $_ })
+      if ($left.Count -eq 0) { break }
+      Start-Sleep -Milliseconds 100
+    }
+  }
+}
+if (PIN) {
+  $pinned = Pinned
+  for ($j = 0; $j -lt $keys.Count; $j++) {
+    if ($pinned -notcontains $keys[$j]) { $f = $sh.Namespace($want[$j]); if ($f) { $f.Self.InvokeVerb('pintohome') } }
+  }
+}
+"""
+
+
+def sync_quick_access(paths: list[str], order: bool = False):
+    """Pin every one of these folders in Explorer's Quick Access that isn't pinned yet, and with
+    order=True keep them in this order: from the first one out of place, those pins are taken
+    off and put back in order (Explorer adds pins at the end; it has no way to move one).
+    Other pins are never touched; missing folders are skipped. Off-thread.
+    Unpinning and pinning are two PowerShell runs: Explorer won't pin a folder again in the
+    same session that just unpinned it."""
     if not paths:
         return
-    wanted = ",".join(_ps_quote(p) for p in paths)
-    _run_ps("$sh=New-Object -ComObject Shell.Application; "
-            f"$pinned=@($sh.Namespace('{QUICK_ACCESS}').Items() | "
-            "Where-Object { $_.ExtendedProperty('System.Home.IsPinned') } | "
-            "ForEach-Object { $_.Path.TrimEnd([char]92).ToLower() }); "
-            f"foreach ($p in @({wanted})) {{ "
-            "if (($pinned -notcontains $p.TrimEnd([char]92).ToLower()) -and (Test-Path -LiteralPath $p)) { "
-            "$f=$sh.Namespace($p); if ($f) { $f.Self.InvokeVerb('pintohome') } } }")
+    base = _QA_SYNC.replace("QA_PATH", QUICK_ACCESS).replace("WANTED", ",".join(_ps_quote(p) for p in paths))
+    if order:
+        _run_ps(base.replace("ORDER", "$true").replace("PIN", "$false"))
+    _run_ps(base.replace("ORDER", "$false").replace("PIN", "$true"))
 
 
 def unpin_from_quick_access(path: str):

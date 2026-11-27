@@ -14,7 +14,7 @@ CONFIG_FILE = CONFIG_DIR / "settings.json"
 
 # Logical column order of the folder model. Visible columns and their order
 # come from the active view layout.
-COLUMNS = ["name", "size", "type", "modified", "created", "accessed", "ext", "attrs"]
+COLUMNS = ["name", "size", "type", "modified", "created", "accessed", "ext", "attrs", "status"]
 COLUMN_TITLES = {
     "name": "Name",
     "size": "Size",
@@ -24,24 +24,25 @@ COLUMN_TITLES = {
     "accessed": "Date accessed",
     "ext": "Extension",
     "attrs": "Attributes",
+    "status": "Status",
 }
 DEFAULT_WIDTHS = {
     "name": 340, "size": 90, "type": 150, "modified": 140,
-    "created": 140, "accessed": 140, "ext": 80, "attrs": 80,
+    "created": 140, "accessed": 140, "ext": 80, "attrs": 80, "status": 62,
 }
 
 # A layout (and a preset) is: visible columns in order, widths, sort, folders-first.
 BUILTIN_PRESETS = {
     "Details + Dates": {
-        "columns": ["name", "size", "type", "created", "modified"],
+        "columns": ["name", "status", "size", "type", "created", "modified"],
         "sort_column": "name", "sort_desc": False, "folders_first": True,
     },
     "Recent first": {
-        "columns": ["name", "modified", "created", "size", "type"],
+        "columns": ["name", "status", "modified", "created", "size", "type"],
         "sort_column": "modified", "sort_desc": True, "folders_first": False,
     },
     "Simple": {
-        "columns": ["name", "size", "modified"],
+        "columns": ["name", "status", "size", "modified"],
         "sort_column": "name", "sort_desc": False, "folders_first": True,
     },
 }
@@ -144,7 +145,7 @@ DEFAULTS = {
     "arrow_sidebar_nav": True,      # ← from the list goes to the sidebar, → comes back
     "shortcut_scheme": "explorer",  # "explorer" (Windows Explorer keys) or "classic" (Burrow 0.11)
     "backdrop": "none",             # window material: none, mica, mica_alt, acrylic
-    "backdrop_tint": "medium",      # how much theme color covers it: light, medium, strong
+    "backdrop_tint": "medium",      # how much theme color covers it: clear, light, medium, strong
     "win_e_opens": "window",        # Win+E: "window" or "tab"
     "split": "",                    # "", "h" (side by side) or "v" (stacked)
     "session_tabs2": [],
@@ -337,6 +338,15 @@ class Config(QObject):
         if 0 <= index < len(bms) and 0 <= j < len(bms):
             bms[index], bms[j] = bms[j], bms[index]
             self._bookmarks_edited()
+
+    def place_bookmark(self, index: int, before: int):
+        """Drag and drop: put bookmark `index` just above bookmark `before` (len = at the end)."""
+        bms = self.bookmarks()
+        if not (0 <= index < len(bms)) or before in (index, index + 1):
+            return
+        b = bms.pop(index)
+        bms.insert(before - 1 if before > index else before, b)
+        self._bookmarks_edited()
 
     def _bookmarks_edited(self):
         self.schedule_save()

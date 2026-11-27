@@ -116,17 +116,15 @@ class NameDelegate(RowDelegate):
             QTimer.singleShot(0, select)
 
     def paint(self, painter, option, index):
-        """Name cell, plus colored tag dots and the cloud sync status at its right end. With no
-        tags and no cloud folder this costs two quick checks per visible name."""
+        """Name cell, plus colored tag dots at its right end. (Cloud sync status has its own
+        Status column, never the name.) With no tags this is one quick check per visible name."""
         store = tags.store()
         e = index.data(ENTRY_ROLE)
         ids = store.get(e.path) if (e is not None and tags.ENABLED and store.items) else []
-        cloud = cloud_state(e.path, e.attrs, e.is_dir) if (e is not None and not e.is_drive) else None
-        if not ids and not cloud:
+        if not ids:
             return super().paint(painter, option, index)
         r = option.rect
-        cloud_w = 20 if cloud else 0
-        dots_w = (10 * len(ids) + 8 if ids else 0) + cloud_w
+        dots_w = 10 * len(ids) + 8
         # fill the dots area like the rest of the row (selection / hover)
         state = option.state
         if state & _SELECTED:
@@ -146,9 +144,17 @@ class NameDelegate(RowDelegate):
             painter.drawEllipse(QPointF(x + 4, cy), 4.5, 4.5)
             x += 10
         painter.restore()
-        if cloud:
-            theme.paint_cloud(painter, QRect(r.right() - cloud_w, r.top(), cloud_w, r.height()), cloud,
-                              option.palette.color(QPalette.ColorRole.PlaceholderText))
+
+
+class StatusDelegate(RowDelegate):
+    """The Status column: the cloud sync glyph, centred (its meaning is in the tooltip)."""
+
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)
+        e = index.data(ENTRY_ROLE)
+        st = cloud_state(e.path, e.attrs, e.is_dir) if (e is not None and not e.is_drive) else None
+        if st:
+            theme.paint_cloud(painter, option.rect, st, option.palette.color(QPalette.ColorRole.PlaceholderText))
 
 
 class FilterEdit(QLineEdit):
@@ -359,6 +365,8 @@ class FolderView(QWidget):
         self.name_delegate = NameDelegate(t)
         t.setItemDelegate(self.row_delegate)
         t.setItemDelegateForColumn(0, self.name_delegate)
+        self.status_delegate = StatusDelegate(t)
+        t.setItemDelegateForColumn(COLUMNS.index("status"), self.status_delegate)
         t.setFrameShape(QFrame.Shape.NoFrame)
         t.setMouseTracking(True)
         t.viewport().setAttribute(Qt.WidgetAttribute.WA_Hover, True)
@@ -477,6 +485,7 @@ class FolderView(QWidget):
         else:
             self._load([select] if select else [], select, clear=True)
         self._sync_own_layout()
+        self._sync_status_column()
         if not self._from_columns:               # not while arrowing through columns
             saved = (self.config.folder_layout(path) or {}).get("mode")
             want = saved or getattr(self, "_chosen_mode", self.mode)
@@ -1180,7 +1189,27 @@ class FolderView(QWidget):
         finally:
             self._applying = False
         self.applied_version = self.config.view_version
+        self._sync_status_column()
         self.fit_columns()
+
+    def _sync_status_column(self):
+        """The Status column shows only in synced folders (OneDrive, iCloud...): elsewhere it would
+        be empty. It stays in the layout either way."""
+        from .model import in_cloud
+        i = COLUMNS.index("status")
+        h = self.tree.header()
+        want = "status" in self.current_layout()["columns"]
+        cloudy = bool(self.path) and not places.is_special(self.path) and in_cloud(self.path)
+        self._status_auto_hidden = want and not cloudy
+        show = want and cloudy
+        if h.isSectionHidden(i) == show:
+            was, self._applying = self._applying, True
+            try:
+                h.setSectionHidden(i, not show)
+                if show and h.sectionSize(i) < 30:
+                    h.resizeSection(i, self.current_layout()["widths"].get("status", DEFAULT_WIDTHS["status"]))
+            finally:
+                self._applying = was
 
     def read_layout(self, prune: bool = False) -> dict:
         """The layout as it's on screen now; prune keeps only shown columns' widths."""
@@ -1196,6 +1225,9 @@ class FolderView(QWidget):
                 widths[c] = h.sectionSize(COLUMNS.index(c))
         if prune:
             widths = {c: w for c, w in widths.items() if c in cols}
+        if getattr(self, "_status_auto_hidden", False) and "status" not in cols:
+            saved = self.current_layout()["columns"]        # hidden here only because no cloud
+            cols.insert(min(saved.index("status"), len(cols)) if "status" in saved else len(cols), "status")
         sec = h.sortIndicatorSection()
         return {
             "columns": cols,
@@ -1236,6 +1268,8 @@ class FolderView(QWidget):
         h = self.tree.header()
         i = COLUMNS.index(key)
         h.setSectionHidden(i, not on)
+        if key == "status":
+            self._status_auto_hidden = False
         if on and h.sectionSize(i) < 30:
             h.resizeSection(i, self.current_layout()["widths"].get(key, DEFAULT_WIDTHS[key]))
         self._layout_edited()
