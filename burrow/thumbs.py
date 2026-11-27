@@ -21,7 +21,7 @@ from collections import OrderedDict
 
 from PySide6.QtCore import (QModelIndex, QObject, QPoint, QRect, QRectF, QRunnable, QSize, Qt, QThreadPool,
                             QTimer, Signal, Slot)
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPalette, QPixmap
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QLinearGradient, QPainter, QPainterPath, QPalette, QPixmap
 from PySide6.QtWidgets import QAbstractItemView, QListView, QStyle, QStyledItemDelegate
 
 from . import theme
@@ -356,6 +356,26 @@ class ThumbDelegate(QStyledItemDelegate):
             if ic is not None:
                 ic.paint(p, QRect(pic.center().x() - side // 2, pic.center().y() - side // 2, side, side))
         if v.river:
+            text = index.data(Qt.ItemDataRole.DisplayRole) or ""
+            f = QFont(option.font)
+            f.setPointSizeF(max(6.5, f.pointSizeF() * 0.78))
+            fm = QFontMetrics(f)
+            band_h = fm.height() + 6
+            if text and pic.height() >= band_h * 2 and pic.width() >= 36:    # a mini name at the bottom
+                band = QRectF(pic.left(), pic.bottom() + 1 - band_h * 1.6, pic.width(), band_h * 1.6)
+                g = QLinearGradient(band.topLeft(), band.bottomLeft())
+                g.setColorAt(0, QColor(0, 0, 0, 0))
+                g.setColorAt(1, QColor(0, 0, 0, 150))
+                clip = QPainterPath()
+                clip.addRoundedRect(QRectF(pic), 6, 6)
+                p.setClipPath(clip)
+                p.fillRect(band, g)
+                p.setClipping(False)
+                p.setFont(f)
+                p.setPen(QColor(255, 255, 255, 235))
+                tr = QRect(pic.left() + 6, pic.bottom() + 1 - band_h, pic.width() - 12, band_h - 2)
+                p.drawText(tr, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                           fm.elidedText(text, Qt.TextElideMode.ElideMiddle, tr.width()))
             if selected:
                 p.setPen(Qt.PenStyle.NoPen)
                 p.setBrush(QColor(hl.red(), hl.green(), hl.blue(), 90))
@@ -385,7 +405,7 @@ class ThumbDelegate(QStyledItemDelegate):
 
 class ThumbView(_Extras, QListView):
     """Thumbnails (river=False): a grid of pictures with names. River (river=True): pictures at
-    one height in flowing rows, each as wide as its picture; the name is in the tooltip."""
+    one height in flowing rows, each as wide as its picture, a mini name along the bottom."""
     size_px = 160                    # defaults: Qt lays out once while the view is being built
     river = False
     _sizes: dict = {}

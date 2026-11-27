@@ -714,15 +714,12 @@ class MainWindow(QMainWindow):
         self.update_btn.hide()
         self.update_btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.update_btn.customContextMenuRequested.connect(self._update_btn_menu)
-        self.auto_update_chk = QToolButton()          # an icon: lit when Burrow checks on start
+        self.auto_update_chk = QToolButton()          # an icon: click to check for updates now
         self.auto_update_chk.setObjectName("statusIcon")
-        self.auto_update_chk.setCheckable(True)
         self.auto_update_chk.setAutoRaise(True)
         self.auto_update_chk.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.auto_update_chk.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.auto_update_chk.setChecked(bool(self.config.get("check_updates")))
-        self.auto_update_chk.toggled.connect(self._auto_update_toggled)
-        self.auto_update_chk.toggled.connect(lambda _on: self._sync_auto_update_icon())
+        self.auto_update_chk.clicked.connect(self._check_now)
         self._sync_auto_update_icon()
         self.progress_pill = ProgressPill()            # copying / extracting, next to the counts
         self._tasks: dict = {}
@@ -838,9 +835,21 @@ class MainWindow(QMainWindow):
 
     def _space_pressed(self) -> bool:
         """Space: Quick Look (a big preview, like macOS), or play / pause the inspector's video
-        when Quick Look is switched off in Settings."""
-        if self.config.get("space_quicklook"):
+        when Quick Look is switched off in Settings. Video and music always play right in the
+        preview pane (or the columns' preview column) instead of opening Quick Look."""
+        ql = getattr(self, "_quicklook", None)
+        if ql is not None and ql.isVisible():
+            return self.toggle_quicklook()           # Space closes it
+        v = self.view()
+        e = v.current_entry() if v is not None else None
+        from .media import AUDIO_EXTS, VIDEO_EXTS
+        playable = e is not None and not e.is_dir and (e.ext in VIDEO_EXTS or e.ext in AUDIO_EXTS)
+        if self.config.get("space_quicklook") and not playable:
             return self.toggle_quicklook()
+        cols = v.columns if v is not None and v.columns_active() else None
+        if cols is not None and cols.preview.media.is_active():
+            cols.preview.media.toggle()
+            return True
         return self.insp_dock.isVisible() and self.inspector.toggle_media()
 
     def toggle_quicklook(self) -> bool:
@@ -1595,10 +1604,6 @@ class MainWindow(QMainWindow):
         c = self.config
         self.view_box.setVisible(bool(c.get("status_view_toggle")))
         self.auto_update_chk.setVisible(bool(c.get("status_auto_update")))
-        if self.auto_update_chk.isChecked() != bool(c.get("check_updates")):
-            self.auto_update_chk.blockSignals(True)
-            self.auto_update_chk.setChecked(bool(c.get("check_updates")))
-            self.auto_update_chk.blockSignals(False)
         self.update_btn.setVisible(bool(c.get("status_update_button")) and getattr(self, "_update_info", None) is not None)
         for wdg in (self.icon_small, self.icon_slider, self.icon_big):
             wdg.setVisible(bool(c.get("status_icon_slider")))
@@ -2369,22 +2374,37 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Update button hidden. Settings ▸ Sidebar & list brings it back.", 6000)
 
     def _sync_auto_update_icon(self):
-        on = self.auto_update_chk.isChecked()
-        ic = theme.icon("auto_update", 16)
-        if not on:                                     # off: the same icon, faded
-            from PySide6.QtGui import QIcon
-            ic = QIcon(ic.pixmap(16, 16, QIcon.Mode.Disabled))
-        self.auto_update_chk.setIcon(ic)
-        self.auto_update_chk.setToolTip("Auto update is on: Burrow checks GitHub for a new version every time it "
-                                        "starts. Click to turn off." if on else
-                                        "Auto update is off. Click to have Burrow check GitHub for a new version "
-                                        "every time it starts.")
+        self.auto_update_chk.setIcon(theme.icon("auto_update", 16))
+        self.auto_update_chk.setToolTip("Check for updates")
 
-    def _auto_update_toggled(self, on: bool):
-        self.config.set("check_updates", on)
-        if on:
-            from . import updater
-            updater.auto_check(self)                         # look right away
+    def _check_now(self):
+        """The status-bar icon: ask GitHub now, quietly; a new version brings up the update prompt
+        (Update now / Later), otherwise a short note in the status bar."""
+        from . import updater
+        btn = self.auto_update_chk
+        btn.setEnabled(False)
+        self.statusBar().showMessage("Checking for updates…")
+        up = updater.Updater(self)
+
+        def done(msg=""):
+            up.deleteLater()
+            btn.setEnabled(True)
+            self.statusBar().showMessage(msg, 6000) if msg else self.statusBar().clearMessage()
+
+        def found(info):
+            done()
+            self.show_update_available(info)
+            updater.UpdateDialog(self, info).exec()
+
+        def latest(_v):
+            import time
+            self.config.set("update_checked", int(time.time()))
+            done(f"Burrow {updater.__version__} is up to date")
+
+        up.found.connect(found)
+        up.upToDate.connect(latest)
+        up.failed.connect(lambda m: done(f"Couldn't check for updates: {m}"))
+        up.check()
 
     def _tool_paths(self):
         """Folders for the tools: the open folders of each pane (left/right for Compare)."""

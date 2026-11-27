@@ -101,7 +101,7 @@ DEFAULTS = {
     "text_syntax_colors": True,
     "preview_archives": True,
     "preview_folders": True,
-    "space_quicklook": True,        # Space: Quick Look (off: Space plays the inspector's video)        # a selected folder's contents in the preview (list view)
+    "space_quicklook": True,        # Space: Quick Look (off: Space plays the inspector's video; video and music always play there)        # a selected folder's contents in the preview (list view)
     "preview_epub": True,
     "media_arrow_seek": True,
     "sidebar_places": True,
@@ -122,7 +122,7 @@ DEFAULTS = {
     "view_mode": "list",            # new tabs open as "list", "columns", "thumbs" or "river"
     "status_view_toggle": True,     # status bar: the four view icons
     "status_icon_slider": True,     # status bar: icon size slider
-    "status_auto_update": True,     # status bar: the Auto update icon
+    "status_auto_update": True,     # status bar: the Check for updates icon
     "status_update_button": True,   # status bar: Update button when a new version is out
     "status_storage_bar": True,     # status bar: how full the drive is, as a skinny pill
     "drive_usage_bars": True,       # This PC: the same pill beside each drive

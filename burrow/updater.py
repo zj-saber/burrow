@@ -298,6 +298,7 @@ class UpdateDialog(QDialog):
             self.sub.setText(f"You have {__version__}. This copy can't update itself "
                              f"(it runs from source or a read-only folder).")
             self.go.setText("Open releases page")
+        self.close_btn.setText("Later")
         if info.get("notes"):
             self.notes.setMarkdown(info["notes"])
             self.notes.show()
