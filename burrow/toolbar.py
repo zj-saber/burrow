@@ -128,6 +128,8 @@ class CommandBar(QWidget):
         ff = m.addAction("Folders first")
         ff.setCheckable(True)
         ff.setChecked(model.folders_first)
+        if v.columns_active():                   # columns: Windows' own order keeps folders first
+            ff.setEnabled(False)
         ff.triggered.connect(lambda on: (v.set_folders_first(on), self.win._sync_view_buttons()))
 
     def _sort(self, key, desc):
@@ -181,7 +183,7 @@ class CommandBar(QWidget):
         self.folder_btn.setEnabled(real)
         self.paste_btn.setEnabled(real and self._clip_files)
         self.extract_btn.setEnabled(w.can_extract(sel))
-        self.sort_btn.setEnabled(not v.columns_active())
+        self.sort_btn.setEnabled(True)
 
     def showEvent(self, ev):
         super().showEvent(ev)

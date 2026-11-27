@@ -214,8 +214,22 @@ def _run_ps(script: str):
 
 def pin_to_quick_access(path: str):
     """Pin a folder in Explorer's Quick Access (no-op if already pinned). Slow-ish: run off-thread."""
-    _run_ps(f"$f=(New-Object -ComObject Shell.Application).Namespace({_ps_quote(path)}); "
-            f"if ($f) {{ $f.Self.InvokeVerb('pintohome') }}")
+    sync_quick_access([path])
+
+
+def sync_quick_access(paths: list[str]):
+    """Pin every one of these folders in Explorer's Quick Access that isn't pinned yet (one
+    PowerShell run for all). Never unpins anything; missing folders are skipped. Off-thread."""
+    if not paths:
+        return
+    wanted = ",".join(_ps_quote(p) for p in paths)
+    _run_ps("$sh=New-Object -ComObject Shell.Application; "
+            f"$pinned=@($sh.Namespace('{QUICK_ACCESS}').Items() | "
+            "Where-Object { $_.ExtendedProperty('System.Home.IsPinned') } | "
+            "ForEach-Object { $_.Path.TrimEnd([char]92).ToLower() }); "
+            f"foreach ($p in @({wanted})) {{ "
+            "if (($pinned -notcontains $p.TrimEnd([char]92).ToLower()) -and (Test-Path -LiteralPath $p)) { "
+            "$f=$sh.Namespace($p); if ($f) { $f.Self.InvokeVerb('pintohome') } } }")
 
 
 def unpin_from_quick_access(path: str):

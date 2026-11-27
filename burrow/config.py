@@ -109,7 +109,7 @@ DEFAULTS = {
     "sidebar_tags": True,
     "sidebar_network": True,
     "single_instance": True,        # later launches open as tabs
-    "quick_access_sync": True,      # bookmarks pinned/unpinned in Explorer Quick Access
+    "quick_access_sync": True,      # bookmarks pinned in Explorer Quick Access (synced at start)
     "inspector_details": True,      # file details shown under the preview
     "inspector_split": 0.6,         # preview height share in the inspector
     "inspector_resizable": True,    # drag handle under photo / PDF / video previews

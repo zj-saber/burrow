@@ -302,6 +302,7 @@ def _startup_chores(win):
             integration.repair()
         except OSError:
             pass
+    win.sync_quick_access()                       # bookmarks pinned in Explorer's Quick Access
     if win.config.get("check_updates"):          # Auto update: every start looks for a new version
         import time
         from . import updater
@@ -396,6 +397,8 @@ class MainWindow(QMainWindow):
         tags.store().changed.connect(self._tags_changed)
         config.bookmarkAdded.connect(lambda p: self._mirror_bookmark(p, True))
         config.bookmarkRemoved.connect(lambda p: self._mirror_bookmark(p, False))
+        self._qa_on = bool(config.get("quick_access_sync"))
+        config.settingsChanged.connect(self._quick_access_switch)
 
         if config.get("window_geometry"):
             self.restoreGeometry(QByteArray.fromHex(config.get("window_geometry").encode()))
@@ -2307,6 +2310,21 @@ class MainWindow(QMainWindow):
         fn = integration.pin_to_quick_access if added else integration.unpin_from_quick_access
         places.run_async(lambda: fn(path), lambda _res: None)
 
+    def sync_quick_access(self):
+        """Every bookmark pinned in Explorer's Quick Access (at start, and when the switch goes on):
+        bookmarks made before, or pins removed in Explorer, come back. Nothing is unpinned."""
+        if not self.config.get("quick_access_sync"):
+            return
+        paths = [b["path"] for b in self.config.bookmarks() if not places.is_special(b["path"])]
+        if paths:
+            places.run_async(lambda: integration.sync_quick_access(paths), lambda _res: None)
+
+    def _quick_access_switch(self):
+        on = bool(self.config.get("quick_access_sync"))
+        if on and not getattr(self, "_qa_on", on):
+            self.sync_quick_access()                 # just turned on
+        self._qa_on = on
+
     def toggle_default_fm(self, on: bool):
         """Turn 'Burrow opens folders and Win+E' on or off (per user; off unless you turn it on)."""
         if on and QMessageBox.question(
@@ -2576,6 +2594,25 @@ class MainWindow(QMainWindow):
         self.config.save()
 
 
+class _crash_log_paused:
+    """Creating the drive watcher's hidden window makes Windows raise and handle access
+    violations inside the call (in DLLs hooked into new windows). They're harmless, but
+    faulthandler would write each one to crash.log as a crash, so it's paused around it."""
+
+    def __enter__(self):
+        import faulthandler
+        self.f = globals().get("_CRASH_FILE")
+        self.on = self.f is not None and faulthandler.is_enabled()
+        if self.on:
+            faulthandler.disable()
+
+    def __exit__(self, *exc):
+        if self.on:
+            import faulthandler
+            faulthandler.enable(self.f)
+        return False
+
+
 def _crash_log():
     """Keep the reason if Burrow ever crashes or hits an error: %APPDATA%\\Burrow\\crash.log
     (the Python stack at a hard crash, and the traceback of any uncaught error, which Burrow
@@ -2638,7 +2675,8 @@ def main():
         schedule_trim()                    # started hidden in the tray
     app.setQuitOnLastWindowClosed(not config.get("run_in_background"))
     from .devwatch import DeviceWatcher
-    app._devwatch = DeviceWatcher(app)
+    with _crash_log_paused():
+        app._devwatch = DeviceWatcher(app)
     app._devwatch.changed.connect(_drives_changed)
     QTimer.singleShot(5000, lambda: _startup_chores(win))
     return app.exec()

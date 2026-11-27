@@ -381,6 +381,7 @@ class FolderView(QWidget):
         h.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         h.customContextMenuRequested.connect(self._header_menu)
         h.sortIndicatorChanged.connect(lambda *_: self._layout_edited())
+        h.sortIndicatorChanged.connect(lambda *_: QTimer.singleShot(0, self._sync_columns_sort))
         h.sectionResized.connect(lambda *_: self._layout_edited())
         h.sectionMoved.connect(lambda *_: self._layout_edited())
 
@@ -637,6 +638,7 @@ class FolderView(QWidget):
             c.horizontalScrollBar().valueChanged.connect(
                 lambda *_: QTimer.singleShot(0, self._sync_results_column))   # after the columns moved
             self._lay.insertWidget(2, c, 1)
+            self._sync_columns_sort()
         if self.columns is not None:
             self.columns.setVisible(want)
         for v, m in ((self.thumbs, "thumbs"), (self.river, "river")):
@@ -646,6 +648,12 @@ class FolderView(QWidget):
         if want and not self._from_columns:
             self.columns.show_path(self.path, select)
         self._sync_results_column()
+
+    def _sync_columns_sort(self):
+        """Columns view sorts like the tab: the toolbar's Sort, a saved view, a header click."""
+        if self.columns is not None:
+            sc = self.model.sort_column
+            self.columns.set_sort(COLUMNS[sc] if 0 <= sc < len(COLUMNS) else "name", self.model.sort_desc)
 
     def _sync_results_column(self):
         """Columns view while searching: the results take the searched folder's column and

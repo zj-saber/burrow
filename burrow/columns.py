@@ -400,6 +400,12 @@ class ColumnsView(QColumnView):
         self._nav_timer.setSingleShot(True)
         self._nav_timer.setInterval(140)
         self._nav_timer.timeout.connect(self._emit_current)
+        # a selected folder shows what's in it in the next column (a peek: just its list), once
+        # the cursor rests a moment, so arrowing quickly down a list never reads every folder
+        self._peek_timer = QTimer(self)
+        self._peek_timer.setSingleShot(True)
+        self._peek_timer.setInterval(80)
+        self._peek_timer.timeout.connect(self._peek)
         self._pending_in = None                 # a folder → was pressed on while still loading
         self.fs.directoryLoaded.connect(self._dir_loaded)
         self._sizes: dict[str, int] = {}        # folder path (normcase) -> size, from Everything
@@ -434,7 +440,9 @@ class ColumnsView(QColumnView):
         col.setAcceptDrops(True)
         col.viewport().setAcceptDrops(True)
         col.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
-        self._ask_folder_sizes(index)
+        cur = self.currentIndex()
+        if not (cur.isValid() and index == cur):   # a peek column: sizes wait until you go in
+            self._ask_folder_sizes(index)
         return col
 
     def set_hover_color(self, color):
@@ -488,6 +496,17 @@ class ColumnsView(QColumnView):
         for col in self.findChildren(QListView):
             col.setIconSize(QSize(px, px))
             col.doItemsLayout()
+
+    FS_SORT = {"name": 0, "size": 1, "type": 2, "modified": 3}     # QFileSystemModel's columns
+
+    def set_sort(self, key: str, desc: bool):
+        """Sort every column like the tab (the toolbar's Sort). Windows' model keeps folders
+        first when sorting by name or size; other keys fall back to name."""
+        order = Qt.SortOrder.DescendingOrder if desc else Qt.SortOrder.AscendingOrder
+        col = self.FS_SORT.get(key, 0)
+        if (col, order) != getattr(self, "_sorted", (0, Qt.SortOrder.AscendingOrder)):
+            self._sorted = (col, order)
+            self.fs.sort(col, order)
 
     def set_show_hidden(self, on: bool):
         f = QDir.Filter.AllEntries | QDir.Filter.NoDotAndDotDot | QDir.Filter.AllDirs | QDir.Filter.Drives
@@ -558,10 +577,69 @@ class ColumnsView(QColumnView):
                       sm.SelectionFlag.ClearAndSelect)
 
     # ----- the user drives us -------------------------------------------------------
-    def _current_changed(self, cur: QModelIndex, _prev):
-        if self._quiet or not cur.isValid():
+    def _current_changed(self, cur: QModelIndex, prev):
+        if not cur.isValid():
+            return
+        self._hide_stale(cur)
+        self._peek_timer.start()
+        if cur.parent() != (prev.parent() if prev.isValid() else QModelIndex()) and cur.parent().isValid():
+            self._ask_folder_sizes(cur.parent())  # went into a folder (or out): now its sizes
+        if self._quiet:
             return
         self._nav_timer.start()
+
+    def _peek(self):
+        """Show the selected folder's contents in the next column, keeping the keyboard and the
+        columns where they are. Only its own list is read (no sizes, nothing deeper)."""
+        cur = self.currentIndex()
+        if not cur.isValid() or not self.fs.isDir(cur) or self.column_for(cur) is not None:
+            return
+        here = self.column_for(cur.parent())
+        had_focus = here is not None and here.hasFocus()
+        hb = self.horizontalScrollBar()
+        x = hb.value()
+        col = self._any_column(cur)
+        if col is None:
+            QColumnView.currentChanged(self, cur, QModelIndex())     # Qt makes the column (hidden)
+            col = self._any_column(cur)
+        if col is None:
+            return
+        if self.fs.canFetchMore(cur):
+            self.fs.fetchMore(cur)
+        col.show()
+        here = self._mark(cur)
+        if here is not None and had_focus:
+            here.setFocus()
+        hb.setValue(x)
+        self._align(cur)
+
+    def _any_column(self, parent: QModelIndex):
+        """A column listing parent, shown or not (Qt keeps made columns hidden until used)."""
+        for c in self.findChildren(_Column):
+            if c.rootIndex() == parent:
+                return c
+        return None
+
+    def _hide_stale(self, cur: QModelIndex):
+        """The cursor moved: a peek at the folder it left goes at once. Only cur's own path
+        (the columns leading to it, and cur's contents) stays on show."""
+        keep = []
+        i = cur
+        while i.isValid():
+            keep.append(i)
+            i = i.parent()
+        shown = {}
+        for c in self.findChildren(_Column):         # oldest first
+            r = c.rootIndex()
+            if not r.isValid() or c.isHidden():
+                continue
+            if r not in keep:
+                c.hide()
+                continue
+            key = self.path_of(r)
+            if key in shown:                     # a peek column, then Qt's own when you went in:
+                shown[key].hide()                # one is enough (Qt's, the newer)
+            shown[key] = c
 
     def _emit_current(self):
         cur = self.currentIndex()

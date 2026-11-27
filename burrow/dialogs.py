@@ -314,7 +314,8 @@ class SettingsDialog(QDialog):
                        "A tray icon keeps Burrow ready, so Win+E always works. Closing the window hides it; "
                        "quit from the tray icon or File ▸ Exit."))
         f.addRow(check("quick_access_sync", "Mirror bookmarks to Explorer Quick Access",
-                       "Adding or removing a bookmark pins or unpins the folder in Explorer."))
+                       "Every bookmark is pinned in Explorer's Quick Access (checked each time Burrow starts); "
+                       "removing a bookmark unpins it."))
         f.addRow(note("Folder colors set in Burrow are always written so Explorer shows them too. "
                       "The Open/Save dialogs inside other apps can't be replaced."))
 
