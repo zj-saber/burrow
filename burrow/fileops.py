@@ -111,9 +111,20 @@ if WIN:
     _shell32.ShellExecuteExW.argtypes = [ctypes.POINTER(_SHELLEXECUTEINFOW)]
 
 
+release_hook = None       # set by the window: previews let go of files about to change
+
+
+def release_files(paths: list[str]):
+    """Before deleting, renaming or moving: a preview showing one of these (a video or song
+    playing, a PDF, Windows' Office previewer) holds it open, so Windows would refuse."""
+    if release_hook is not None and paths:
+        release_hook(paths)
+
+
 def delete_paths(paths: list[str], hwnd: int = 0, permanent: bool = False) -> tuple[bool, bool]:
     """Send to the Recycle Bin (or delete permanently). Returns (succeeded, user_aborted)."""
     paths = [os.path.abspath(p) for p in paths]
+    release_files(paths)
     if not WIN:
         for p in paths:
             shutil.rmtree(p) if os.path.isdir(p) else os.remove(p)

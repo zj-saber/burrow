@@ -237,6 +237,9 @@ class _Extras:
             if self.owner.icon_wheel_handler is not None:
                 self.owner.icon_wheel_handler(1 if ev.angleDelta().y() > 0 else -1)
             return
+        g = getattr(self, "glide", None)
+        if g is not None and g.wheel(ev):
+            return
         super().wheelEvent(ev)
 
     @staticmethod
@@ -308,6 +311,22 @@ def _setup(view, owner):
 
 
 # ----- Thumbnails and River -----------------------------------------------------------------
+_ICON_PIXMAPS: OrderedDict = OrderedDict()
+
+
+def _icon_pixmap(icon, side: int, dpr: float):
+    """A file-type icon drawn at this size, made once: painting a big icon from scratch took
+    ~2.6 ms each, every repaint (a screen of placeholders was ~230 ms)."""
+    key = (icon.cacheKey(), side, round(dpr * 100))
+    pm = _ICON_PIXMAPS.get(key)
+    if pm is None:
+        pm = icon.pixmap(QSize(side, side), dpr)
+        _ICON_PIXMAPS[key] = pm
+        if len(_ICON_PIXMAPS) > 400:
+            _ICON_PIXMAPS.popitem(last=False)
+    return pm
+
+
 class ThumbDelegate(QStyledItemDelegate):
     def __init__(self, view):
         super().__init__(view)
@@ -333,7 +352,7 @@ class ThumbDelegate(QStyledItemDelegate):
                 p.setBrush(hl)
                 p.drawRoundedRect(QRectF(r).adjusted(2, 2, -2, -2), 8, 8)
             elif hovered:
-                theme.paint_hover(p, r.adjusted(-1, 0, 1, 0), v.hover_color)
+                theme.paint_hover(p, QRectF(r).adjusted(2, 2, -2, -2), v.hover_color, 8)
         pic = v.picture_rect(r)
         pm = v.thumb_for(e)
         if pm is not None:
@@ -354,7 +373,8 @@ class ThumbDelegate(QStyledItemDelegate):
             if v.river:
                 p.fillRect(pic, QColor(128, 128, 128, 30))
             if ic is not None:
-                ic.paint(p, QRect(pic.center().x() - side // 2, pic.center().y() - side // 2, side, side))
+                pm = _icon_pixmap(ic, side, p.device().devicePixelRatioF() if p.device() else 1.0)
+                p.drawPixmap(QRect(pic.center().x() - side // 2, pic.center().y() - side // 2, side, side), pm)
         if v.river:
             text = index.data(Qt.ItemDataRole.DisplayRole) or ""
             f = QFont(option.font)
@@ -426,6 +446,8 @@ class ThumbView(_Extras, QListView):
         self.setWordWrap(False)
         self.size_px = 160
         self.setItemDelegate(ThumbDelegate(self))
+        from .glide import Glide
+        self.glide = Glide(self, lambda: int(self.size_px * 0.8))      # most of a row a notch
         self._relayout = QTimer(self)                 # river: pictures arrived, widths changed
         self._relayout.setSingleShot(True)
         self._relayout.setInterval(120)

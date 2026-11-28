@@ -154,6 +154,8 @@ class _RowDelegate(QStyledItemDelegate):
             view.renameFailed.emit(f"“{name}” already exists here.")
             return
         try:
+            from . import fileops
+            fileops.release_files([old])
             os.rename(old, new)
         except OSError as ex:
             view.renameFailed.emit(f"Couldn't rename: {ex.strerror or ex}")
@@ -420,6 +422,7 @@ class ColumnsView(QColumnView):
         # _mark() shows it in its column. Ctrl/Shift-clicks in a column report here.
         col.selectionModel().selectionChanged.connect(lambda *_: self.columnSelectionChanged.emit())
         col.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        col.setUniformItemSizes(True)            # every row is the same: measure one, not 5,000
         col.verticalScrollBar().setSingleStep(max(16, self._delegate.height) if hasattr(self, "_delegate") else 24)
         col.setRootIndex(index)
         if self.fs.canFetchMore(index):

@@ -588,6 +588,8 @@ class DirModel(QAbstractTableModel):
             self.renameFailed.emit(f'"{new}" already exists in this folder.')
             return False
         try:
+            from . import fileops
+            fileops.release_files([e.path])
             os.rename(e.path, new_path)
         except OSError as ex:
             self.renameFailed.emit(f'Couldn\'t rename "{e.name}": {ex.strerror or ex}')

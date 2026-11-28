@@ -291,6 +291,41 @@ def _repaint_lists():
                         c.viewport().update()
 
 
+def release_previews(paths: list[str]):
+    """fileops.release_hook: every preview showing one of these paths (or something inside a
+    folder among them) lets go of it: the side pane, Quick Look, columns' preview column.
+    Media players close their file a moment after being told, so wait for that briefly."""
+    keys = [os.path.normcase(os.path.normpath(p)).rstrip("\\") for p in paths]
+
+    def hit(p) -> bool:
+        if not p:
+            return False
+        n = os.path.normcase(os.path.normpath(p))
+        return any(n == k or n.startswith(k + "\\") for k in keys)
+
+    media = False
+    for w in WINDOWS:
+        ins = w.inspector
+        if hit(getattr(ins, "_shown", None)) or hit(ins.media._path):
+            media = media or ins.media.is_active()
+            ins._reset()
+        ql = getattr(w, "_quicklook", None)
+        if ql is not None and ql.isVisible() and hit(getattr(getattr(ql, "entry", None), "path", None)):
+            media = media or ql.media.is_active()
+            ql.close()
+        for v in w.views():
+            c = getattr(v, "columns", None)
+            if c is not None and hit(c.preview.path):
+                media = media or c.preview.media.is_active()
+                c.preview.clear()
+    if media:                                     # the player lets go on its own thread
+        import time
+        end = time.monotonic() + 0.3
+        while time.monotonic() < end:
+            QApplication.processEvents()
+            time.sleep(0.01)
+
+
 def _startup_chores(win):
     """A while after start: tidy up after an update and look for a new release."""
     if getattr(sys, "frozen", False):
@@ -1934,6 +1969,8 @@ class MainWindow(QMainWindow):
         if not target or is_location(target):
             return False
         target = os.path.normpath(target)
+        if move:
+            fileops.release_files(list(sources))      # a previewed file can't be moved while open
         if not os.path.isdir(target):
             QMessageBox.warning(self, APP_NAME, f"The destination folder doesn't exist:\n{target}")
             return False
@@ -2621,6 +2658,50 @@ class _crash_log_paused:
         return False
 
 
+def _freeze_watch():
+    """If Burrow's window stops answering for 2 s, write what it was doing to
+    %APPDATA%\\Burrow\\freezes.log (once per freeze), so a freeze can be found and fixed.
+    A timer beats every 250 ms on the window's thread; a small thread watches it."""
+    import threading
+    import time
+    import traceback
+    from .config import CONFIG_DIR
+    main_id = threading.get_ident()
+    beat = [time.monotonic()]
+    timer = QTimer()
+    timer.setInterval(250)
+    timer.timeout.connect(lambda: beat.__setitem__(0, time.monotonic()))
+    timer.start()
+    globals()["_FREEZE_TIMER"] = timer
+
+    def watch():
+        logged = 0.0
+        while True:
+            time.sleep(0.5)
+            stuck = time.monotonic() - beat[0]
+            if stuck < 2.0:
+                logged = 0.0
+                continue
+            if logged:
+                continue
+            logged = beat[0]
+            frame = sys._current_frames().get(main_id)
+            stack = "".join(traceback.format_stack(frame)) if frame is not None else "(no Python frame)"
+            try:
+                path = CONFIG_DIR / "freezes.log"
+                CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+                if path.exists() and path.stat().st_size > 256 * 1024:
+                    path.write_text("", encoding="utf-8")
+                from . import __version__
+                with open(path, "a", encoding="utf-8") as f:
+                    f.write(f"--- {time.strftime('%Y-%m-%d %H:%M:%S')} Burrow {__version__}: "
+                            f"not answering for {stuck:.1f} s, at:\n{stack}\n")
+            except OSError:
+                pass
+
+    threading.Thread(target=watch, name="freeze-watch", daemon=True).start()
+
+
 def _crash_log():
     """Keep the reason if Burrow ever crashes or hits an error: %APPDATA%\\Burrow\\crash.log
     (the Python stack at a hard crash, and the traceback of any uncaught error, which Burrow
@@ -2682,6 +2763,8 @@ def main():
     else:
         schedule_trim()                    # started hidden in the tray
     app.setQuitOnLastWindowClosed(not config.get("run_in_background"))
+    fileops.release_hook = release_previews     # previews let go of files being changed
+    _freeze_watch()                              # freezes.log: where a freeze was stuck
     from .devwatch import DeviceWatcher
     with _crash_log_paused():
         app._devwatch = DeviceWatcher(app)

@@ -182,9 +182,13 @@ class FileTree(QTreeView):
         self._hover_row = -1
 
     def drawRow(self, painter, option, index):
-        """The hovered row gets one rounded band across all its columns, then the row on top."""
+        """The hovered row gets a lighter version of the selection, across its columns and
+        ending with the last one (like a selected row), then the row on top."""
         if index.row() == self._hover_row and not self.selectionModel().isSelected(index):
-            theme.paint_hover(painter, option.rect, self.hover_color)
+            h = self.header()
+            r = QRect(option.rect)
+            r.setRight(min(r.right(), h.length() - h.offset() - 1))
+            theme.paint_hover(painter, r, self.hover_color)
         super().drawRow(painter, option, index)
 
     def _set_hover(self, row: int):
@@ -210,6 +214,9 @@ class FileTree(QTreeView):
         if (ev.modifiers() & Qt.KeyboardModifier.ControlModifier and self.owner.icon_wheel_handler is not None
                 and ev.angleDelta().y()):
             self.owner.icon_wheel_handler(1 if ev.angleDelta().y() > 0 else -1)
+            return
+        g = getattr(self, "glide", None)
+        if g is not None and g.wheel(ev):
             return
         super().wheelEvent(ev)
 
@@ -357,6 +364,10 @@ class FolderView(QWidget):
         t.setRootIsDecorated(False)
         t.setItemsExpandable(False)
         t.setUniformRowHeights(True)
+        # pixel scrolling (only the strip coming into view is painted: per-row scrolling redrew
+        # the whole list on every step) and a gliding wheel
+        from .glide import Glide, lines
+        t.glide = Glide(t, lambda: lines() * self.row_height())
         t.setAllColumnsShowFocus(True)
         t.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         t.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)

@@ -11,6 +11,8 @@ Keys: + / - zoom, 0 fit, 1 actual size, PgUp/PgDn pages.
 """
 from __future__ import annotations
 
+import os
+
 from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QImage, QImageReader, QKeySequence, QPainter, QPixmap, QShortcut
 from PySide6.QtWidgets import (QDialog, QFrame, QGraphicsPixmapItem, QGraphicsScene, QGraphicsView,
@@ -22,6 +24,9 @@ PREVIEW_MAX = 1600          # side length of the quick preview image
 FULL_MAX = 12000            # cap for the full-resolution image (memory)
 MIN_ZOOM, MAX_ZOOM = 0.05, 16.0
 
+
+
+PDF_IN_MEMORY = 128 * 2**20     # PDFs up to this size are read into memory (never held open)
 
 class _View(QGraphicsView):
     """The graphics view under the zoomable preview: wheel/pinch zoom, pan, page keys."""
@@ -143,8 +148,12 @@ class ZoomView(QWidget):
         self.path = None
         self.kind = None
         self.item.setPixmap(QPixmap())
-        if self._pdf is not None:
-            self._pdf.close()
+        if self._pdf is not None:                # Qt's close() keeps the file open: drop the
+            self._pdf.close()                    # reader itself (made again on the next PDF)
+            import shiboken6
+            shiboken6.delete(self._pdf)
+            self._pdf = None
+        self._pdf_buf = None
         self.hide()
 
     def load_image(self, path: str) -> dict:
@@ -192,7 +201,25 @@ class ZoomView(QWidget):
         from PySide6.QtPdf import QPdfDocument
         if self._pdf is None:
             self._pdf = QPdfDocument(self)
-        err = self._pdf.load(path)
+        # read into memory, so the file is never held open (it can be renamed, moved or deleted
+        # while it's on show, by Burrow or anything else); very big ones are read from disk
+        try:
+            big = os.path.getsize(path) > PDF_IN_MEMORY
+        except OSError:
+            big = True
+        if big:
+            err = self._pdf.load(path)
+        else:
+            from PySide6.QtCore import QBuffer, QByteArray, QIODevice
+            try:
+                with open(path, "rb") as f:
+                    data = f.read()
+            except OSError as ex:
+                return {"error": f"Can't open this PDF ({ex.strerror or ex})."}
+            self._pdf_buf = QBuffer(self._pdf)
+            self._pdf_buf.setData(QByteArray(data))
+            self._pdf_buf.open(QIODevice.OpenModeFlag.ReadOnly)
+            err = self._pdf.load(self._pdf_buf)
         if err != QPdfDocument.Error.None_:
             name = getattr(err, "name", str(err))
             return {"error": "This PDF is password-protected." if "Password" in name else f"Can't open this PDF ({name})."}

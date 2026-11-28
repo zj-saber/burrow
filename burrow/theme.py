@@ -381,24 +381,27 @@ def inspector_qss(c):
 """
 
 
-# ----- hover highlight (FilePilot-style rounded band) ---------------------------------
+# ----- hover highlight: a lighter version of the selection ---------------------------
 def hover_color(c: dict, strength: int) -> QColor:
-    """The hover band: the text color at low opacity, so it lightens dark themes and darkens
-    light ones. strength 0 (off) to 100 (strong)."""
-    col = QColor(c["text"])
-    col.setAlpha(round(max(0, min(100, strength)) * 0.7))     # 0..70 of 255
+    """The hover fill: the selection color, see-through, so hovering looks like a lighter
+    selection. strength 0 (off) to 100 (strong)."""
+    col = QColor(c["select"])
+    col.setAlpha(round(max(0, min(100, strength)) * 2.3))     # 0..230 of 255
     return col
 
 
-def paint_hover(p: QPainter, rect, color: QColor):
-    """A soft rounded band, inset a little from the row's edges."""
+def paint_hover(p: QPainter, rect, color: QColor, radius: float = 0):
+    """The hover fill, the same shape as a selected row (flat; rounded where selection is)."""
     if color.alpha() == 0:
+        return
+    if not radius:
+        p.fillRect(rect, color)
         return
     p.save()
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
     p.setPen(Qt.PenStyle.NoPen)
     p.setBrush(color)
-    p.drawRoundedRect(QRectF(rect).adjusted(3, 1, -3, -1), 6, 6)
+    p.drawRoundedRect(QRectF(rect), radius, radius)
     p.restore()
 
 
